@@ -80,39 +80,36 @@ class Channel3to1(object):
 
 class BrainSliceDataset(Dataset):
     # inl: image and labels
-    def __init__(self, image_transform=None, pre_transform=None):
+    def __init__(self, train=True, image_transform=None, pre_transform=None):
         super(BrainSliceDataset, self).__init__()
+        self.train = train
         self.image_transform = image_transform
         self.pre_transform = pre_transform
         self.point_labels = self.get_point_labels()
         self.categories = self.get_category()
+        self.category_transofm = {"circle": 0, "line": 1, "other": 2}
         #print(self.labels)
 
     def __getitem__(self, item):
-        image = Image.open("/home/hdl2/Desktop/SonoDataset/Images/%d.jpg" % (item)).convert('L')
-        point_label = self.point_labels[item]
-        #image, labels = SizeCoorTransform((28, 28))(image, labels)
-        #original_size = image.size
-        #current_size = (28, 28)
-        #image = image.resize(current_size)
+        if self.train == True:
+            image = Image.open("/home/hdl2/Desktop/SonoDataset/Images/%d.jpg" % (item)).convert('L')
+            label = self.category_transofm[self.categories[item]]
+        else:
+            image = Image.open("/home/hdl2/Desktop/SonoDataset/Images/%d.jpg" % (item + 400)).convert('L')
+            label = self.category_transofm[self.categories[item + 400]]
 
-        #image = np.asarray(image)[..., 0]
-        #image = mu.copy_2D_to_3D(image, 3)
-        #image = image.reshape(224, 224, 3)
-        #mu.show_detail(image)
-        if self.pre_transform is not None:
-            image, point_label = self.pre_transform(image, point_label)
-            point_label = [point_label[0][0], point_label[0][1], point_label[1][0], point_label[1][1]]
-            point_label = torch.LongTensor(point_label)#.view(-1, 1)
-            print("after pretranform: ", point_label)
         if self.image_transform is not None:
             image = self.image_transform(image)
 
-        return image, point_label #self.point_label[item][0]
+        return image, label
 
     def __len__(self):
         # except .git
-        return len(os.listdir("/home/hdl2/Desktop/SonoDataset/Images/")) - 1
+        if self.train == True:
+            return 400
+        else:
+            return 101
+        #return len(os.listdir("/home/hdl2/Desktop/SonoDataset/Images/")) - 1
 
     def str2coordinate(self, str):
         '''
@@ -165,94 +162,62 @@ transformer = transforms.Compose([
     ]
 )
 
-train_loader = DataLoader(BrainSliceDataset(image_transform=transformer, pre_transform=SizeCoorTransform((28, 28))), batch_size=6)
-test_loader = train_loader
-assert 0
+train_loader = DataLoader(BrainSliceDataset(train=True, image_transform=transformer, pre_transform=None), batch_size=6)
+test_loader = DataLoader(BrainSliceDataset(train=False, image_transform=transformer, pre_transform=None), batch_size=6)
 
-class Net(torch.nn.Module):
+class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
         self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-        self.fc1 = nn.Linear(320, 50)
-        self.fc2 = nn.Linear(50, 4)
+        self.conv2 = nn.Conv2d(10, 20, kernel_size=7)
+        self.conv3 = nn.Conv2d(20, 40, kernel_size=5)
+        self.conv3_drop = nn.Dropout2d()
+        self.fc1 = nn.Linear(23040, 50)
+        self.fc2 = nn.Linear(50, 3)
 
     def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.dropout2d(self.conv2(x))
-        x = F.relu(F.max_pool2d(x, 2))
-        #x = F.relu(F.max_pool2d(self.drop(self.conv2(x)), 2))
-        x = x.view(-1, 320) # 20 * 4 * 4 i.e. channels * kernel_w * kernel_h
+        x = F.relu(F.max_pool2d(self.conv1(x), 2)) # 10 * 110 * 110
+        x = F.relu(F.max_pool2d(self.conv2(x), 2)) # 20 * 52 * 52
+        x = F.relu(F.max_pool2d(self.conv3_drop(self.conv3(x)), 2)) # 40 * 24 * 24
+        x = x.view(-1, 23040)
         x = F.relu(self.fc1(x))
         x = F.dropout(x, training=self.training)
         x = self.fc2(x)
-        x = F.log_softmax(x)
-
-        return x
-
+        return F.log_softmax(x)
 model = Net()
 model.cuda()
 
 optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.7)
 
-
-
-
-
-
-
-
-
-
-
-
-
 def train(epoch):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
-        target = target.float()
-
+        print("target:", target)
+        print(data.shape, type(data))
         data, target = Variable(data.cuda()), Variable(target.cuda())
         optimizer.zero_grad()
         output = model(data)
-        #loss = F.nll_loss(output, target)
-        print(target.data, output.data)
-        time.sleep(0.5)
-
-        #loss = F.cross_entropy(output, target)
-        loss = F.mse_loss(output, target)
-        # got (int, torch.cuda.FloatTensor, !torch.cuda.LongTensor!, torch.cuda.FloatTensor, bool)
-        # exp (int, torch.cuda.FloatTensor,  torch.cuda.FloatTensor, torch.cuda.FloatTensor, bool)
-        #loss = F.nll_loss(output, target)
-
-
+        loss = F.nll_loss(output, target)
         loss.backward()
         optimizer.step()
-        #print("epoch: %d %d/%d (%0.0f%%)\tLoss: %0.6f" % (epoch, epoch * len(data), len(train_loader.dataset), 100. * batch_idx / len(train_loader), loss.data[0]))
+        print("epoch: %d %d/%d (%0.0f%%)\tLoss: %0.6f" % (epoch, epoch * len(data), len(train_loader.dataset), 100. * batch_idx / len(train_loader), loss.data[0]))
 
-def test(epoch):
+def test():
     model.eval()
     test_loss = 0
     correct = 0
     for batch_idx, (data, target) in enumerate(test_loader):
         data, target = Variable(data.cuda()), Variable(target.cuda())
-        target = target.float()
         output = model(data)
-        #loss = F.mse_loss(output, target, size_average=False)
-        test_loss += F.mse_loss(output, target, size_average=False).data[0]
+        #F.mse_loss()
+        test_loss += F.nll_loss(output, target, size_average=False).data[0]
         prediction = output.data.max(1, keepdim=True)[1]
-        real = target.data.max(1, keepdim=True)[1]
-        print(prediction)
-        print(prediction.eq(real.view_as(prediction)).cpu().sum())
-
-        correct += prediction.eq(real.view_as(prediction)).cpu().sum()
+        correct += prediction.eq(target.data.view_as(prediction)).cpu().sum()
 
     test_loss /= len(test_loader.dataset)
     print("\nTest set: Average loss: %.4f, Accuracy: %d/%d (%.0f%%)\n" %(test_loss, correct, len(test_loader.dataset), 100. * correct / len(test_loader.dataset)))
+    time.sleep(1)
 
-
-for epoch in range(0, 10):
+for epoch in range(0, 50):
     train(epoch)
-    test(epoch)
-
-
+    test()
