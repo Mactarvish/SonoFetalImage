@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torchvision import transforms, utils
 import MaUtilities as mu
+import shutil
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
@@ -45,6 +46,16 @@ def to_categorical(y, num_classes=None):
     categorical = np.zeros((n, num_classes))
     categorical[np.arange(n), y] = 1
     return categorical
+
+def image2modelinput(file_name):
+    image = Image.open(file_name).convert('L')
+    #input = Variable(transforms.ToTensor()(image).cuda())
+    #torch.squeeze()
+    input = Variable(torch.unsqueeze(transforms.ToTensor()(image), dim=0).cuda())
+    #print(input)
+    return input
+
+
 
 class SizeCoorTransform(object):
     def __init__(self, new_size):
@@ -87,7 +98,7 @@ class BrainSliceDataset(Dataset):
         self.pre_transform = pre_transform
         self.point_labels = self.get_point_labels()
         self.categories = self.get_category()
-        self.category_transofm = {"circle": 0, "line": 1, "other": 2}
+        self.category_transofm = {"circle": 0, "line": 1, "other": 1}
         #print(self.labels)
 
     def __getitem__(self, item):
@@ -95,8 +106,8 @@ class BrainSliceDataset(Dataset):
             image = Image.open("/home/hdl2/Desktop/SonoDataset/Images/%d.jpg" % (item)).convert('L')
             label = self.category_transofm[self.categories[item]]
         else:
-            image = Image.open("/home/hdl2/Desktop/SonoDataset/Images/%d.jpg" % (item + 400)).convert('L')
-            label = self.category_transofm[self.categories[item + 400]]
+            image = Image.open("/home/hdl2/Desktop/SonoDataset/Images/%d.jpg" % (item + 700)).convert('L')
+            label = self.category_transofm[self.categories[item + 700]]
 
         if self.image_transform is not None:
             image = self.image_transform(image)
@@ -106,7 +117,7 @@ class BrainSliceDataset(Dataset):
     def __len__(self):
         # except .git
         if self.train == True:
-            return 400
+            return 700
         else:
             return 101
         #return len(os.listdir("/home/hdl2/Desktop/SonoDataset/Images/")) - 1
@@ -173,7 +184,7 @@ class Net(nn.Module):
         self.conv3 = nn.Conv2d(20, 40, kernel_size=5)
         self.conv3_drop = nn.Dropout2d()
         self.fc1 = nn.Linear(23040, 50)
-        self.fc2 = nn.Linear(50, 3)
+        self.fc2 = nn.Linear(50, 2)
 
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 2)) # 10 * 110 * 110
@@ -202,7 +213,9 @@ def train(epoch):
         optimizer.step()
         print("epoch: %d %d/%d (%0.0f%%)\tLoss: %0.6f" % (epoch, epoch * len(data), len(train_loader.dataset), 100. * batch_idx / len(train_loader), loss.data[0]))
 
-def test():
+good_prediction_count = 0
+
+def validation():
     model.eval()
     test_loss = 0
     correct = 0
@@ -216,8 +229,44 @@ def test():
 
     test_loss /= len(test_loader.dataset)
     print("\nTest set: Average loss: %.4f, Accuracy: %d/%d (%.0f%%)\n" %(test_loss, correct, len(test_loader.dataset), 100. * correct / len(test_loader.dataset)))
+    if correct >= 95:
+        global good_prediction_count
+        good_prediction_count += 1
+        if good_prediction_count == 3:
+            torch.save(model.state_dict(), 'weights.pkl')
+            #print("training is over!")
+            assert 0, "training is over!"
+    else:
+        good_prediction_count = 0
+
     time.sleep(1)
 
-for epoch in range(0, 50):
-    train(epoch)
-    test()
+def test(n_image):
+    model.load_state_dict(torch.load('weights.pkl'))
+    model.eval()
+    file_name = "/home/hdl2/Desktop/SonoDataset/Images/%d.jpg" % (n_image)
+    data = image2modelinput(file_name)
+    output = model(data)
+    prediction = output.data.max(1, keepdim=True)[1]
+    prediction = prediction.cpu().numpy()[0][0]
+    couple = {0: "circle", 1: "other"}
+    print(couple[int(prediction)])
+
+def classify(): # 0~10043
+    model.load_state_dict(torch.load('weights.pkl'))
+    model.eval()
+    for i in range(10044):
+        file_name = "/home/hdl2/Desktop/SonoDataset/Images/%d.jpg" % (i)
+        data = image2modelinput(file_name)
+        output = model(data)
+        prediction = output.data.max(1, keepdim=True)[1]
+        prediction = prediction.cpu().numpy()[0][0]
+        if prediction == 0:
+            print(i)
+            shutil.copyfile(file_name, "/home/hdl2/Desktop/SonoDataset/Circles/" + "%d.jpg" % (i))
+
+
+# for epoch in range(0, 50):
+#     train(epoch)
+#     validation()
+classify()
