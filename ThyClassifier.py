@@ -25,19 +25,21 @@ from torchvision import datasets, models, transforms
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 import time
+import cv2
+from torchvision import datasets, models, transforms
+
 
 import sqlite3
 
+use_gpu = torch.cuda.is_available()
 image_location = "/home/hdl2/Desktop/SonoFetalImage/ThyImage/"
 label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "postoperative1": 3, "subacute_thyroiditis1": 4, "subhyperthyreosis1": 5}
 
 connection = sqlite3.connect("ThyDataset")
 cu = connection.cursor()
-cu.execute("select * from ThyDataset where id=2")
-a = cu.fetchall()[0]
-print(a)
-
-assert 0
+# cu.execute("select * from Train where id=2")
+# a = cu.fetchall()[0]
+# print(a)
 
 torch.manual_seed(123)
 torch.cuda.manual_seed(222)
@@ -71,7 +73,15 @@ def image2modelinput(file_name):
     #print(input)
     return input
 
-
+class ResizeImage(object):
+    """
+    Input an numpy array or a PIL image and return a PIL image with given size "new_size", keeping num of channels unchanged.
+    """
+    def __init__(self, new_size):
+        self.new_size = new_size
+    def __call__(self, image):
+        image = cv2.resize(np.asarray(image), self.new_size)
+        return Image.fromarray(image)
 
 class SizeCoorTransform(object):
     def __init__(self, new_size):
@@ -98,12 +108,6 @@ class SizeCoorTransform(object):
                 n_coordinates.append(n_coordinate)
 
         return image, n_coordinates
-
-class Channel3to1(object):
-    def __init__(self):
-        pass
-    def __call__(self, image):
-        pass
 
 class BrainSliceDataset(Dataset):
     # inl: image and labels
@@ -192,9 +196,9 @@ class ThyDataset(Dataset):
 
     def __getitem__(self, item):
         if self.train == True:
-            cu.execute("select * from Train where id=%d" % item)
+            cu.execute("select * from Train where id=%d" % (item + 1))
         else:
-            cu.execute("select * from Validation where id=%d" % item)
+            cu.execute("select * from Validation where id=%d" % (item + 1))
 
         record = cu.fetchall()[0]
         image_name = record[1]
@@ -259,13 +263,106 @@ class ThyDataset(Dataset):
 
 
 transformer = transforms.Compose([
+    ResizeImage((255, 255)),
     transforms.ToTensor(), # range [0, 255] -> [0.0,1.0]
     transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
     ]
 )
 
-train_loader = DataLoader(ThyDataset(train=True, image_transform=transformer, pre_transform=None), batch_size=6)
-test_loader = DataLoader(ThyDataset(train=False, image_transform=transformer, pre_transform=None), batch_size=6)
+train_loader = DataLoader(ThyDataset(train=True, image_transform=transformer, pre_transform=None), batch_size=6, num_workers=6)
+val_loader = DataLoader(ThyDataset(train=False, image_transform=transformer, pre_transform=None), batch_size=6, num_workers=6)
+
+dataloaders = {"train": train_loader, "val": val_loader}
+dataset_sizes = {"train": len(ThyDataset(train=True)), "val": len(ThyDataset(train=False))}
+
+model_ft = models.resnet18(pretrained=True)
+
+num_ftrs = model_ft.fc.in_features
+model_ft.fc = nn.Linear(num_ftrs, 6)
+
+if use_gpu:
+    model_ft = model_ft.cuda()
+
+criterion = nn.CrossEntropyLoss()
+
+# Observe that all parameters are being optimized
+optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+
+# Decay LR by a factor of 0.1 every 7 epochs
+exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
+
+def train_model(model, criterion, optimizer, scheduler, num_epochs=10):
+    since = time.time()
+
+    best_model_wts = model.state_dict()
+    best_acc = 0.0
+
+    for epoch in range(num_epochs):
+        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+        print('-' * 10)
+
+        # Each epoch has a training and validation phase
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                scheduler.step()
+                model.train(True)  # Set model to training mode
+            else:
+                model.train(False)  # Set model to evaluate mode
+
+            running_loss = 0.0
+            running_corrects = 0
+
+            # Iterate over data.
+            for data in dataloaders[phase]:
+                # get the inputs
+                inputs, labels = data
+
+                # wrap them in Variable
+                if use_gpu:
+                    inputs = Variable(inputs.cuda())
+                    labels = Variable(labels.cuda())
+                else:
+                    inputs, labels = Variable(inputs), Variable(labels)
+
+                # zero the parameter gradients
+                optimizer.zero_grad()
+
+                # forward
+                outputs = model(inputs)
+                _, preds = torch.max(outputs.data, 1)
+                loss = criterion(outputs, labels)
+
+                # backward + optimize only if in training phase
+                if phase == 'train':
+                    loss.backward()
+                    optimizer.step()
+
+                # statistics
+                running_loss += loss.data[0]
+                running_corrects += torch.sum(preds == labels.data)
+
+            epoch_loss = running_loss / dataset_sizes[phase]
+            epoch_acc = running_corrects / dataset_sizes[phase]
+
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
+                phase, epoch_loss, epoch_acc))
+
+            # deep copy the model
+            if phase == 'val' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                best_model_wts = model.state_dict()
+
+        print()
+
+    time_elapsed = time.time() - since
+    print('Training complete in {:.0f}m {:.0f}s'.format(
+        time_elapsed // 60, time_elapsed % 60))
+    print('Best val Acc: {:4f}'.format(best_acc))
+
+    # load best model weights
+    model.load_state_dict(best_model_wts)
+    return model
+
 
 class Net(nn.Module):
     def __init__(self):
@@ -310,7 +407,7 @@ def validation():
     model.eval()
     test_loss = 0
     correct = 0
-    for batch_idx, (data, target) in enumerate(test_loader):
+    for batch_idx, (data, target) in enumerate(val_loader):
         data, target = Variable(data.cuda()), Variable(target.cuda())
         output = model(data)
         #F.mse_loss()
@@ -318,8 +415,8 @@ def validation():
         prediction = output.data.max(1, keepdim=True)[1]
         correct += prediction.eq(target.data.view_as(prediction)).cpu().sum()
 
-    test_loss /= len(test_loader.dataset)
-    print("\nTest set: Average loss: %.4f, Accuracy: %d/%d (%.0f%%)\n" %(test_loss, correct, len(test_loader.dataset), 100. * correct / len(test_loader.dataset)))
+    test_loss /= len(val_loader.dataset)
+    print("\nTest set: Average loss: %.4f, Accuracy: %d/%d (%.0f%%)\n" %(test_loss, correct, len(val_loader.dataset), 100. * correct / len(val_loader.dataset)))
     if correct >= 95:
         global good_prediction_count
         good_prediction_count += 1
@@ -359,8 +456,5 @@ def classify(): # 0~10043
             shutil.copyfile(file_name, "/home/hdl2/Desktop/SonoDataset/Circles/" + "%d.jpg" % (circle_index))
             circle_index += 1
 
-
-# for epoch in range(0, 50):
-#     train(epoch)
-#     validation()
-classify()
+model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,
+                       num_epochs=25)
