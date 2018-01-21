@@ -65,8 +65,9 @@ def to_categorical(y, num_classes=None):
     categorical[np.arange(n), y] = 1
     return categorical
 
-def image2modelinput(file_name):
-    image = Image.open(file_name).convert('L')
+def image2modelinput(file_name, model_input_size=None):
+    image = Image.open(file_name)#.convert('L')
+    image = mu.ResizeImage(model_input_size)(image)
     #input = Variable(transforms.ToTensor()(image).cuda())
     #torch.squeeze()
     input = Variable(torch.unsqueeze(transforms.ToTensor()(image), dim=0).cuda())
@@ -194,15 +195,44 @@ class ThyDataset(Dataset):
         self.image_transform = image_transform
         self.pre_transform = pre_transform
 
-    def __getitem__(self, item):
-        if self.train == True:
-            cu.execute("select * from Train where id=%d" % (item + 1))
-        else:
-            cu.execute("select * from Validation where id=%d" % (item + 1))
+        # For unknown reason(maybe memory problem?), loading datas from sqlite will be crashed after thousands of loading,
+        # so we directly save datas to memory first avoiding loading from sqlite repeatly.
+        # Note that the dict starts from 1, NOT 0.
+        self.train_set = {}
+        self.val_set = {}
 
-        record = cu.fetchall()[0]
+        # load training datas
+        cu.execute("select * from Train")
+        records = cu.fetchall()
+        for record in records:
+            self.train_set[record[0]] = record
+
+        # load validation datas
+        cu.execute("select * from Validation")
+        records = cu.fetchall()
+        for record in records:
+            self.val_set[record[0]] = record
+
+    def __getitem__(self, item):
+        record = None
+        if self.train == True:
+            # query = "select * from Train where id=%d" % (item + 1)
+            # print("select * from Train where id=%d" % (item + 1))
+            # cu.execute("select * from Train where id=%d" % (item + 1))
+
+            record = self.train_set[item + 1]
+
+        else:
+            # query = "select * from Validation where id=%d" % (item + 1)
+            # print("select * from Validation where id=%d" % (item + 1))
+            # cu.execute("select * from Validation where id=%d" % (item + 1))
+
+            record = self.val_set[item + 1]
+
+        # record = cu.fetchall()[0]
         image_name = record[1]
         category = record[2]
+        #print(image_name, category)
         image = Image.open(image_location + image_name)#.convert('L')
         label = label_map[category]
 
@@ -265,12 +295,12 @@ class ThyDataset(Dataset):
 transformer = transforms.Compose([
     ResizeImage((255, 255)),
     transforms.ToTensor(), # range [0, 255] -> [0.0,1.0]
-    transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+    transforms.Normalize(mean=[0.333, 0.0586, 0.023], std=[0.265, 0.138, 0.0224])
     ]
 )
-
-train_loader = DataLoader(ThyDataset(train=True, image_transform=transformer, pre_transform=None), batch_size=6, num_workers=6)
-val_loader = DataLoader(ThyDataset(train=False, image_transform=transformer, pre_transform=None), batch_size=6, num_workers=6)
+# [0.33381739584119885, 0.05862841105989082, 0.023407234558809612], [0.26509894104564447, 0.13794070296714034, 0.022363285181095156]
+train_loader = DataLoader(ThyDataset(train=True, image_transform=transformer, pre_transform=None),  shuffle=True, batch_size=6, num_workers=6)
+val_loader   = DataLoader(ThyDataset(train=False, image_transform=transformer, pre_transform=None), shuffle=True, batch_size=6, num_workers=6)
 
 dataloaders = {"train": train_loader, "val": val_loader}
 dataset_sizes = {"train": len(ThyDataset(train=True)), "val": len(ThyDataset(train=False))}
@@ -362,6 +392,15 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=10):
     # load best model weights
     model.load_state_dict(best_model_wts)
     return model
+
+model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,
+                       num_epochs=25)
+
+# torch.save(model_ft, 'Thynet.pkl')  # 保存整个神经网络的结构和模型参数
+# torch.save(model_ft.state_dict(), 'Thynet.pkl')  # 只保存神经网络的模型参数
+
+# model_ft.load_state_dict(torch.load("Thynet.pkl"))
+# print(torch.max(model_ft(image2modelinput("ThyImage/hyperthyreosis1_251701.jpg", (255, 255))), 1)[1])
 
 
 class Net(nn.Module):
@@ -456,5 +495,4 @@ def classify(): # 0~10043
             shutil.copyfile(file_name, "/home/hdl2/Desktop/SonoDataset/Circles/" + "%d.jpg" % (circle_index))
             circle_index += 1
 
-model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,
-                       num_epochs=25)
+
