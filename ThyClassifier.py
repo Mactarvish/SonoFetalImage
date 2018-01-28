@@ -35,7 +35,7 @@ use_gpu = torch.cuda.is_available()
 image_location = "/home/hdl2/Desktop/SonoFetalImage/ThyImage/"
 label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "postoperative1": 3, "subacute_thyroiditis1": 4, "subhyperthyreosis1": 5}
 
-connection = sqlite3.connect("ThyDataset")
+connection = sqlite3.connect("ThyDataset_Shuffled")
 cu = connection.cursor()
 # cu.execute("select * from Train where id=2")
 # a = cu.fetchall()[0]
@@ -109,84 +109,6 @@ class SizeCoorTransform(object):
                 n_coordinates.append(n_coordinate)
 
         return image, n_coordinates
-
-class BrainSliceDataset(Dataset):
-    # inl: image and labels
-    def __init__(self, train=True, image_transform=None, pre_transform=None):
-        super(BrainSliceDataset, self).__init__()
-        self.train = train
-        self.image_transform = image_transform
-        self.pre_transform = pre_transform
-        self.point_labels = self.get_point_labels()
-        self.categories = self.get_category()
-        self.category_transofm = {"circle": 0, "line": 1, "other": 1}
-        #print(self.labels)
-
-    def __getitem__(self, item):
-        if self.train == True:
-            image = Image.open("/home/hdl2/Desktop/SonoDataset/OriginalImages/%d.jpg" % (item)).convert('L')
-            label = self.category_transofm[self.categories[item]]
-        else:
-            image = Image.open("/home/hdl2/Desktop/SonoDataset/OriginalImages/%d.jpg" % (item + 700)).convert('L')
-            label = self.category_transofm[self.categories[item + 700]]
-
-        if self.image_transform is not None:
-            image = self.image_transform(image)
-
-        return image, label
-
-    def __len__(self):
-        # except .git
-        if self.train == True:
-            return 700
-        else:
-            return 101
-        #return len(os.listdir("/home/hdl2/Desktop/SonoDataset/OriginalImages/")) - 1
-
-    def str2coordinate(self, str):
-        '''
-        :param str: like '(231,55)'
-        :return: str to tuple
-        :example: '(231,55)' -> tuple (231, 55)
-        '''
-        nums = str[1:-1].split(',')
-        #print(nums)
-        return (int(nums[0]), int(nums[1]))
-
-    def get_point_labels(self):
-        f = open("RectLabels.txt")
-        labels = {}
-        lines = f.readlines()
-        for line in lines:
-            # print(line)
-            elements = line.split(' ')
-            coordinates = []
-            index = None
-            for e in elements:
-                #print('e:', e)
-                if '.jpg' in e:
-                    index = int(e[: -4])
-                else:
-                    #bad condition, need repairing later
-                    if e == '\n':
-                        #print('happens')
-                        continue
-                    coordinates.append(self.str2coordinate(e))
-            labels[index] = coordinates
-        return labels
-
-    def get_category(self):
-        f = open("/home/hdl2/Desktop/SonoDataset/Labels/classify.txt")
-        labels = {}
-        lines = f.readlines()
-        for line in lines:
-            print(line)
-            number = int(line.split('.')[0])
-            category = line.split(' ')[-1][:-1]
-            labels[number] = category
-        print(labels)
-        return labels
-
 
 class ThyDataset(Dataset):
     def __init__(self, train=True, image_transform=None, pre_transform=None):
@@ -305,7 +227,46 @@ val_loader   = DataLoader(ThyDataset(train=False, image_transform=transformer, p
 dataloaders = {"train": train_loader, "val": val_loader}
 dataset_sizes = {"train": len(ThyDataset(train=True)), "val": len(ThyDataset(train=False))}
 
-model_ft = models.resnet18(pretrained=True)
+
+class ThresholdBlock(models.resnet.BasicBlock):
+    expansion = 1
+
+    def __init__(self, inplanes, planes, stride=1, downsample=None):
+        super(ThresholdBlock, self).__init__(inplanes, planes, stride, downsample)
+        self.threshold = nn.Parameter(torch.Tensor([1.55]))
+        print(torch.typename(self.threshold))
+
+    def forward(self, x):
+        residual = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        out += residual * self.threshold
+        out = self.relu(out)
+
+        return out
+
+def resnet_th(pretrained=False, **kwargs):
+    """Constructs a ResNet-18 model.
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = models.ResNet(ThresholdBlock, [2, 2, 2, 2], **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(models.resnet.model_urls['resnet18']))
+    return model
+
+#model_ft = resnet_th(pretrained=False)
+model_ft = models.resnet18(pretrained=False)
 
 num_ftrs = model_ft.fc.in_features
 model_ft.fc = nn.Linear(num_ftrs, 6)
