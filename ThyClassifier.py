@@ -71,6 +71,16 @@ def image2modelinput(file_name, model_input_size=None):
     #print(input)
     return input
 
+class ResizeImage(object):
+    """
+    Input an numpy array or a PIL image and return a PIL image with given size "new_size", keeping num of channels unchanged.
+    """
+    def __init__(self, new_size):
+        self.new_size = new_size
+    def __call__(self, image):
+        image = cv2.resize(np.asarray(image), self.new_size)
+        return Image.fromarray(image)
+
 class SizeCoorTransform(object):
     def __init__(self, new_size):
         self.n_size = new_size
@@ -157,7 +167,7 @@ class ThyDataset(Dataset):
             return 300
 
 transformer = transforms.Compose([
-    mu.ResizeImage((255, 255)),
+    ResizeImage((255, 255)),
     transforms.ToTensor(), # range [0, 255] -> [0.0,1.0]
     transforms.Normalize(mean=[0.333, 0.0586, 0.023], std=[0.265, 0.138, 0.0224])
     ]
