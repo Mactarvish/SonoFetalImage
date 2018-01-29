@@ -37,9 +37,6 @@ label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "p
 
 connection = sqlite3.connect("ThyDataset_Shuffled")
 cu = connection.cursor()
-# cu.execute("select * from Train where id=2")
-# a = cu.fetchall()[0]
-# print(a)
 
 torch.manual_seed(123)
 torch.cuda.manual_seed(222)
@@ -169,51 +166,6 @@ class ThyDataset(Dataset):
         else:
             return 300
 
-    def str2coordinate(self, str):
-        '''
-        :param str: like '(231,55)'
-        :return: str to tuple
-        :example: '(231,55)' -> tuple (231, 55)
-        '''
-        nums = str[1:-1].split(',')
-        #print(nums)
-        return (int(nums[0]), int(nums[1]))
-
-    def get_point_labels(self):
-        f = open("RectLabels.txt")
-        labels = {}
-        lines = f.readlines()
-        for line in lines:
-            # print(line)
-            elements = line.split(' ')
-            coordinates = []
-            index = None
-            for e in elements:
-                #print('e:', e)
-                if '.jpg' in e:
-                    index = int(e[: -4])
-                else:
-                    #bad condition, need repairing later
-                    if e == '\n':
-                        #print('happens')
-                        continue
-                    coordinates.append(self.str2coordinate(e))
-            labels[index] = coordinates
-        return labels
-
-    def get_category(self):
-        f = open("/home/hdl2/Desktop/SonoDataset/Labels/classify.txt")
-        labels = {}
-        lines = f.readlines()
-        for line in lines:
-            print(line)
-            number = int(line.split('.')[0])
-            category = line.split(' ')[-1][:-1]
-            labels[number] = category
-        print(labels)
-        return labels
-
-
 transformer = transforms.Compose([
     ResizeImage((255, 255)),
     transforms.ToTensor(), # range [0, 255] -> [0.0,1.0]
@@ -223,7 +175,6 @@ transformer = transforms.Compose([
 # [0.33381739584119885, 0.05862841105989082, 0.023407234558809612], [0.26509894104564447, 0.13794070296714034, 0.022363285181095156]
 train_loader = DataLoader(ThyDataset(train=True, image_transform=transformer, pre_transform=None),  shuffle=True, batch_size=6, num_workers=6)
 val_loader   = DataLoader(ThyDataset(train=False, image_transform=transformer, pre_transform=None), shuffle=True, batch_size=6, num_workers=6)
-
 dataloaders = {"train": train_loader, "val": val_loader}
 dataset_sizes = {"train": len(ThyDataset(train=True)), "val": len(ThyDataset(train=False))}
 
@@ -234,7 +185,6 @@ class ThresholdBlock(models.resnet.BasicBlock):
     def __init__(self, inplanes, planes, stride=1, downsample=None):
         super(ThresholdBlock, self).__init__(inplanes, planes, stride, downsample)
         self.threshold = nn.Parameter(torch.Tensor([1.55]))
-        print(torch.typename(self.threshold))
 
     def forward(self, x):
         residual = x
@@ -262,11 +212,11 @@ def resnet_th(pretrained=False, **kwargs):
     """
     model = models.ResNet(ThresholdBlock, [2, 2, 2, 2], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(models.resnet.model_urls['resnet18']))
+        model.load_state_dict(torch.load("resnet_th.pth"))
     return model
 
-#model_ft = resnet_th(pretrained=False)
-model_ft = models.resnet18(pretrained=False)
+model_ft = resnet_th(pretrained=True)
+#model_ft = models.resnet18(pretrained=False)
 
 num_ftrs = model_ft.fc.in_features
 model_ft.fc = nn.Linear(num_ftrs, 6)
@@ -362,98 +312,3 @@ model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,
 
 # model_ft.load_state_dict(torch.load("Thynet.pkl"))
 # print(torch.max(model_ft(image2modelinput("ThyImage/hyperthyreosis1_251701.jpg", (255, 255))), 1)[1])
-
-
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=7)
-        self.conv3 = nn.Conv2d(20, 40, kernel_size=5)
-        self.conv3_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(23040, 50)
-        self.fc2 = nn.Linear(50, 2)
-
-    def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2)) # 10 * 110 * 110
-        x = F.relu(F.max_pool2d(self.conv2(x), 2)) # 20 * 52 * 52
-        x = F.relu(F.max_pool2d(self.conv3_drop(self.conv3(x)), 2)) # 40 * 24 * 24
-        x = x.view(-1, 23040)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        x = self.fc2(x)
-        return F.log_softmax(x)
-model = Net()
-model.cuda()
-
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.7)
-
-def train(epoch):
-    model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        print("target:", target)
-        print(data.shape, type(data))
-        data, target = Variable(data.cuda()), Variable(target.cuda())
-        optimizer.zero_grad()
-        output = model(data)
-        loss = F.nll_loss(output, target)
-        loss.backward()
-        optimizer.step()
-        print("epoch: %d %d/%d (%0.0f%%)\tLoss: %0.6f" % (epoch, epoch * len(data), len(train_loader.dataset), 100. * batch_idx / len(train_loader), loss.data[0]))
-
-good_prediction_count = 0
-
-def validation():
-    model.eval()
-    test_loss = 0
-    correct = 0
-    for batch_idx, (data, target) in enumerate(val_loader):
-        data, target = Variable(data.cuda()), Variable(target.cuda())
-        output = model(data)
-        #F.mse_loss()
-        test_loss += F.nll_loss(output, target, size_average=False).data[0]
-        prediction = output.data.max(1, keepdim=True)[1]
-        correct += prediction.eq(target.data.view_as(prediction)).cpu().sum()
-
-    test_loss /= len(val_loader.dataset)
-    print("\nTest set: Average loss: %.4f, Accuracy: %d/%d (%.0f%%)\n" %(test_loss, correct, len(val_loader.dataset), 100. * correct / len(val_loader.dataset)))
-    if correct >= 95:
-        global good_prediction_count
-        good_prediction_count += 1
-        if good_prediction_count == 3:
-            torch.save(model.state_dict(), 'weights.pkl')
-            #print("training is over!")
-            assert 0, "training is over!"
-    else:
-        good_prediction_count = 0
-
-    time.sleep(1)
-
-def test(n_image):
-    model.load_state_dict(torch.load('weights.pkl'))
-    model.eval()
-    file_name = "/home/hdl2/Desktop/SonoDataset/OriginalImages/%d.jpg" % (n_image)
-    data = image2modelinput(file_name)
-    output = model(data)
-    prediction = output.data.max(1, keepdim=True)[1]
-    prediction = prediction.cpu().numpy()[0][0]
-    couple = {0: "circle", 1: "other"}
-    print(couple[int(prediction)])
-
-circle_index = 0
-def classify(): # 0~10043
-    model.load_state_dict(torch.load('weights.pkl'))
-    model.eval()
-    for i in range(10044):
-        file_name = "/home/hdl2/Desktop/SonoDataset/OriginalImages/%d.jpg" % (i)
-        data = image2modelinput(file_name)
-        output = model(data)
-        prediction = output.data.max(1, keepdim=True)[1]
-        prediction = prediction.cpu().numpy()[0][0]
-        if prediction == 0:
-            print(i)
-            global circle_index
-            shutil.copyfile(file_name, "/home/hdl2/Desktop/SonoDataset/Circles/" + "%d.jpg" % (circle_index))
-            circle_index += 1
-
-
