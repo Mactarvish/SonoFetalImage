@@ -2,6 +2,7 @@ import sqlite3
 import shutil
 import os
 import MaUtilities as mu
+import random
 
 def CreateTable():
     connection = sqlite3.connect("ThyDataset")
@@ -51,6 +52,7 @@ for dir in dirs:
     cu = connection.cursor()
     category = dir.split('/')[-1]
     image_names = os.listdir(dir)
+    random.shuffle(image_names)
     num_images = len(image_names)
     count = 0
     for image_name in image_names:
