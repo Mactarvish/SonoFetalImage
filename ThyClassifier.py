@@ -166,6 +166,21 @@ class ThyDataset(Dataset):
         else:
             return 300
 
+class SubTrainDataset(ThyDataset):
+    def __init__(self, subset, image_transform=None, pre_transform=None):
+        super(SubTrainDataset, self).__init__(train=True, image_transform=image_transform, pre_transform=pre_transform)
+        self.subset = subset
+
+    def __len__(self):
+        return 4150//2
+
+    def __getitem__(self, item):
+        if self.subset == 1:
+            return super(SubTrainDataset, self).__getitem__(item=item)
+        elif self.subset == 2:
+            return super(SubTrainDataset, self).__getitem__(item=item + 4150/2)
+
+
 transformer = transforms.Compose([
     ResizeImage((255, 255)),
     transforms.ToTensor(), # range [0, 255] -> [0.0,1.0]
@@ -174,7 +189,9 @@ transformer = transforms.Compose([
 )
 # [0.33381739584119885, 0.05862841105989082, 0.023407234558809612], [0.26509894104564447, 0.13794070296714034, 0.022363285181095156]
 train_loader = DataLoader(ThyDataset(train=True, image_transform=transformer, pre_transform=None),  shuffle=True, batch_size=6, num_workers=6)
-val_loader   = DataLoader(ThyDataset(train=False, image_transform=transformer, pre_transform=None), shuffle=True, batch_size=6, num_workers=6)
+subset_loader1 = DataLoader(SubTrainDataset(subset=1, image_transform=transformer, pre_transform=None),  shuffle=True, batch_size=6, num_workers=6)
+subset_loader2 = DataLoader(SubTrainDataset(subset=2, image_transform=transformer, pre_transform=None),  shuffle=True, batch_size=6, num_workers=6)
+val_loader = DataLoader(ThyDataset(train=False, image_transform=transformer, pre_transform=None), shuffle=True, batch_size=6, num_workers=6)
 dataloaders = {"train": train_loader, "val": val_loader}
 dataset_sizes = {"train": len(ThyDataset(train=True)), "val": len(ThyDataset(train=False))}
 
