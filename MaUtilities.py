@@ -124,8 +124,7 @@ def save_rected_image(frame, positions):
 
 def display(*inputs, ion=True):
     assert len(inputs) < 10, "number of inputs must be smaller than 10"
-    # Close last displayer
-    #plt.close()
+
     if ion:
         plt.ion()
     else:
@@ -144,12 +143,16 @@ def display(*inputs, ion=True):
             image_arrays.append(image)
     plt.figure("MaUtilities Display")
     num_images = len(image_arrays)
+
     for i in range(1, num_images + 1):
         plt.subplot(100 + num_images * 10 + i)
         plt.imshow(image_arrays[i - 1])
-        if ion:
-            plt.pause(1)
-    plt.show()
+
+        # Note: If not block in ioff, when the first image shown in ion and the second one shown in ioff, the second image
+        # can NOT be shown (maybe the switch of interactive status causes that first image blocks the process.
+        plt.pause(1)
+    if not ion:
+        plt.show()
 
 # Resize an array to 'new_shape' using bilinear interpolation.
 def resize_image(feature_array, new_shape=(224, 224)):
