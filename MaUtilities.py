@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw
 from scipy import signal
 import cv2
 from sklearn import metrics
+import torch
 
 image_path = './IU22Frame/%d.png'
 save_path = "./IU22Result/%d.png"
@@ -293,6 +294,7 @@ def save_matrics(y_true, y_pred, losses, net_name):
     print('average_accuracy: {0:f}'.format(average_accuracy))
     print('overall_accuracy: {0:f}'.format(overall_accuracy))
     print('score: {0:f}'.format(score))
+    print()
     dic = {'net_name': net_name, 'classify_report': classify_report, 'confusion_matrix': confusion_matrix, 'acc_for_each_class': acc_for_each_class,
      'average_accuracy': average_accuracy, 'overall_accuracy': overall_accuracy, 'score': score, 'losses': losses}
     torch.save(dic, 'matrics/%s' % (net_name))
