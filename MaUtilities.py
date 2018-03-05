@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from scipy import signal
 import cv2
+from sklearn import metrics
 
 image_path = './IU22Frame/%d.png'
 save_path = "./IU22Result/%d.png"
@@ -247,6 +248,55 @@ def VisdomDrawLines(*lines, legends=None):
         X=np.linspace(0, Y.shape[0]-1, Y.shape[0]),
         opts=opts,
     )
+
+def to_categorical(y, num_classes=None):
+    """Converts a class vector (integers) to binary class matrix.
+
+    E.g. for use with categorical_crossentropy.
+
+    # Arguments
+        y: class vector to be converted into a matrix
+            (integers from 0 to num_classes).
+        num_classes: total number of classes.
+
+    # Returns
+        A binary matrix representation of the input.
+    """
+    y = np.array(y, dtype='int').ravel()
+    if not num_classes:
+        num_classes = np.max(y) + 1
+    n = y.shape[0]
+    categorical = np.zeros((n, num_classes))
+    categorical[np.arange(n), y] = 1
+    return categorical
+
+def image2modelinput(file_name, model_input_size=None):
+    image = Image.open(file_name)#.convert('L')
+    image = mu.ResizeImage(model_input_size)(image)
+    #input = Variable(transforms.ToTensor()(image).cuda())
+    #torch.squeeze()
+    input = Variable(torch.unsqueeze(transforms.ToTensor()(image), dim=0).cuda())
+    #print(input)
+    return input
+
+def save_matrics(y_true, y_pred, losses, net_name):
+    classify_report    = metrics.classification_report(y_true, y_pred)
+    confusion_matrix   = metrics.confusion_matrix(y_true, y_pred)
+    overall_accuracy   = metrics.accuracy_score(y_true, y_pred)
+    acc_for_each_class = metrics.precision_score(y_true, y_pred, average=None)
+    average_accuracy   = np.mean(acc_for_each_class)
+    score = metrics.accuracy_score(y_true, y_pred)
+
+    print('classify_report : \n', classify_report)
+    print('confusion_matrix : \n', confusion_matrix)
+    print('acc_for_each_class : \n', acc_for_each_class)
+    print('average_accuracy: {0:f}'.format(average_accuracy))
+    print('overall_accuracy: {0:f}'.format(overall_accuracy))
+    print('score: {0:f}'.format(score))
+    dic = {'net_name': net_name, 'classify_report': classify_report, 'confusion_matrix': confusion_matrix, 'acc_for_each_class': acc_for_each_class,
+     'average_accuracy': average_accuracy, 'overall_accuracy': overall_accuracy, 'score': score, 'losses': losses}
+    torch.save(dic, 'matrics/%s' % (net_name))
+
 ################################################################ pytorch transformer ################################################################
 class ResizeImage(object):
     """
