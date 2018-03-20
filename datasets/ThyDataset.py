@@ -32,10 +32,10 @@ from torchvision import datasets, models, transforms
 import sqlite3
 
 use_gpu = torch.cuda.is_available()
-image_location = "/home/hdl2/Desktop/SonoFetalImage/ThyImage/"
+image_location = "/home/hdl2/Desktop/MedicalImage/"
 label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "postoperative1": 3, "subacute_thyroiditis1": 4, "subhyperthyreosis1": 5}
 
-connection = sqlite3.connect("ThyDataset_Shuffled")
+connection = sqlite3.connect("ThyDataset_Shuffled_v100")
 cu = connection.cursor()
 
 class ThyDataset(Dataset):
@@ -83,10 +83,7 @@ class ThyDataset(Dataset):
         image_name = record[1]
         category = record[2]
         #print(image_name, category)
-        image = Image.open(image_location + image_name)#.convert('L')
-        # image = None
-        # with Image.open(image_location + image_name) as img:
-        #     image = img
+        image = Image.open(image_location + category + '/' + image_name)#.convert('L')
         label = label_map[category]
 
         if self.image_transform is not None:
@@ -96,6 +93,6 @@ class ThyDataset(Dataset):
 
     def __len__(self):
         if self.train == True:
-            return 4150
+            return 4050
         else:
-            return 300
+            return 600

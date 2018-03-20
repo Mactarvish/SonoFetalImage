@@ -280,7 +280,7 @@ def image2modelinput(file_name, model_input_size=None):
     #print(input)
     return input
 
-def save_matrics(y_true, y_pred, losses, net_name):
+def save_matrics_model(y_true, y_pred, losses, net_name, model=None):
     classify_report    = metrics.classification_report(y_true, y_pred)
     confusion_matrix   = metrics.confusion_matrix(y_true, y_pred)
     overall_accuracy   = metrics.accuracy_score(y_true, y_pred)
@@ -297,7 +297,19 @@ def save_matrics(y_true, y_pred, losses, net_name):
     print()
     dic = {'net_name': net_name, 'classify_report': classify_report, 'confusion_matrix': confusion_matrix, 'acc_for_each_class': acc_for_each_class,
      'average_accuracy': average_accuracy, 'overall_accuracy': overall_accuracy, 'score': score, 'losses': losses}
-    torch.save(dic, 'matrics/%s' % (net_name))
+    # Save metircs record
+    current_best = 0
+    try:
+        current_best = torch.load('matrics/%s' % (net_name))['score']
+    except:
+        current_best = 0
+    finally:
+        if dic['score'] > current_best:
+            print('achieved best in record, save it.')
+            torch.save(dic, 'matrics/%s' % (net_name))
+            if model != None:
+                print('save model.')
+                torch.save(model, 'models/%s.pkl' % (net_name))
 
 ################################################################ pytorch transformer ################################################################
 class ResizeImage(object):

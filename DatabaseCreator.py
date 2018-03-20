@@ -59,7 +59,7 @@ for dir in dirs:
     count = 0
     for image_name in image_names:
         # distribute 50 images every category for Validation
-        if num_images - count > 50:
+        if num_images - count > 100:
             train_set.append((image_name, category))
             # cu.execute("insert into Train (imagename, imagecategory) values ('%s', '%s')" % (image_name, category))
         else:
@@ -77,27 +77,3 @@ for train_sample in train_set:
 for validation_sample in validation_set:
     cu.execute("insert into Validation (imagename, imagecategory) values ('%s', '%s')" % (validation_sample[0], validation_sample[1]))
 connection.commit()
-
-
-
-
-# for dir in dirs:
-#     connection = sqlite3.connect("ThyDataset")
-#     cu = connection.cursor()
-#     category = dir.split('/')[-1]
-#     image_names = os.listdir(dir)
-#     random.shuffle(image_names)
-#     num_images = len(image_names)
-#     count = 0
-#     for image_name in image_names:
-#         # distribute 50 images every category for Validation
-#         if num_images - count > 50:
-#             cu.execute("insert into Train (imagename, imagecategory) values ('%s', '%s')" % (image_name, category))
-#         else:
-#             cu.execute("insert into Validation (imagename, imagecategory) values ('%s', '%s')" % (image_name, category))
-#         count += 1
-#         print(count, '/', num_images)
-#     connection.commit()
-
-
-

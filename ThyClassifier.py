@@ -30,9 +30,11 @@ from torchvision import datasets, models, transforms
 import sqlite3
 
 from models.resnet_th import resnet_th
+from models.my_densenet import mydensenet121
 from datasets.ThyDataset import ThyDataset
 
 use_gpu = torch.cuda.is_available()
+torch.cuda.set_device(0)
 image_location = "/home/hdl2/Desktop/SonoFetalImage/ThyImage/"
 label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "postoperative1": 3, "subacute_thyroiditis1": 4, "subhyperthyreosis1": 5}
 
@@ -50,42 +52,63 @@ transformer = transforms.Compose([
     ]
 )
 # [0.33381739584119885, 0.05862841105989082, 0.023407234558809612], [0.26509894104564447, 0.13794070296714034, 0.022363285181095156]
-train_loader = DataLoader(ThyDataset(train=True, image_transform=transformer, pre_transform=None),  shuffle=True, batch_size=6, num_workers=6)
+train_loader = DataLoader(ThyDataset(train=True, image_transform=transformer, pre_transform=None),  shuffle=True, batch_size=5, num_workers=6)
 val_loader   = DataLoader(ThyDataset(train=False, image_transform=transformer, pre_transform=None), shuffle=True, batch_size=6, num_workers=6)
-dataloaders = {"train": train_loader, "val": val_loader}
-# dataset_sizes = {"train": len(ThyDataset(train=True)), "val": len(ThyDataset(train=False))}
 
+# model = resnet_th(pretrained=True)
+# model = models.resnet18(pretrained=True)
+# model = models.vgg16(pretrained=True)
+model = mydensenet121(pretrained=True)
 
-model = resnet_th(pretrained=True)
-#model = models.resnet18(pretrained=False)
-
-# num_ftrs = model.fc.in_features
-# model.fc = nn.Linear(num_ftrs, 6)
 
 if use_gpu:
-    model = nn.DataParallel(model)
+    # model = nn.DataParallel(model)
     model = model.cuda()
 
 criterion = nn.CrossEntropyLoss()
-optimizer_ft = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
+optimizer_ft = optim.SGD(model.parameters(), lr=0.0005, momentum=0.9)
+exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=5, gamma=0.1)
 
 def Tensor2Variable_CEL(input, label):
+    """
+    :param input: Torch.Tensor
+    :param label: Torch.Tensor
+    :return: Torch.Tensor.cuda() obey CEL type
+    """
     input = Variable(input).cuda().float()
     label = Variable(label).cuda().long()
     return input, label
+
+def t2t_fft(tensor_nchw):
+    """
+    :param tensor_nchw: Torch.Tensor
+    :return: Torch.Tensor
+    """
+    np_image_nchw = tensor_nchw.numpy()
+    f_shift = np.fft.fftshift(np.fft.fft2(np_image_nchw, axes=(-1, -2)), axes=(-1, -2))
+    f_amplify = 20 * np.log10(np.abs(f_shift))
+    f_amplify = f_amplify - np.min(f_amplify)
+    f_amplify = f_amplify / 255
+    # mu.display(f_amplify[0, 0, ...], f_amplify[0, 1, ...], f_amplify[0, 2, ...],
+    #            f_amplify[1, 0, ...], f_amplify[1, 1, ...], f_amplify[1, 2, ...],
+    #            ion=False)
+    f_amplify = torch.from_numpy(f_amplify).float()
+    return f_amplify
 
 def train_model(model, criterion, optimizer, scheduler, num_epochs):
     model.train(True)
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch+1, num_epochs))
         print('-' * 10)
+        since = time.time()
 
         scheduler.step()
         for (input, label) in train_loader:
             optimizer.zero_grad()
             # prepare datas
-            input, label = Tensor2Variable_CEL(input, label)
+            input_fft = t2t_fft(input)
+            # print(torch.cat([input_fft, input], 1).shape)
+            input, label = Tensor2Variable_CEL(input_fft, label)
             # run the model
             output = model(input)
             loss = criterion(output, label)
@@ -94,12 +117,17 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs):
 
         test_model(model, criterion)
 
+        time_diff = time.time() - since
+        print('epoch complete in {:0.2f} seconds'.format(time_diff))
+        print()
+
 # only 1 epoch
 def test_model(model, criterion):
     model.train(False)
     log_y_predictions = []
     log_y_trues = []
     log_losses = []
+    epoch_loss = 0
     for (input, label) in val_loader:
         input, label = Tensor2Variable_CEL(input, label)
         output = model(input)
@@ -110,84 +138,12 @@ def test_model(model, criterion):
             log_y_predictions.append(e)
         for e in label.data:
             log_y_trues.append(e)
-        log_losses.append(loss.cpu().data.numpy()[0])
-    mu.save_matrics(log_y_trues, log_y_predictions, log_losses, 'new_structure_test')
+        epoch_loss += loss.cpu().data.numpy()[0]
+    log_losses.append(epoch_loss)
 
+    mu.save_matrics_model(log_y_trues, log_y_predictions, log_losses, 'resnet18', model=model)
 
-# def train_model(model, criterion, optimizer, scheduler, num_epochs=10):
-#     since = time.time()
-#
-#     best_model_wts = model.state_dict()
-#     best_acc = 0.0
-#
-#     for epoch in range(num_epochs):
-#         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
-#         print('-' * 10)
-#
-#         # Each epoch has a training and validation phase
-#         for phase in ['train', 'val']:
-#             if phase == 'train':
-#                 scheduler.step()
-#                 model.train(True)  # Set model to training mode
-#             else:
-#                 model.train(False)  # Set model to evaluate mode
-#
-#             running_loss = 0.0
-#             running_corrects = 0
-#
-#             # Iterate over data.
-#             for data in dataloaders[phase]:
-#                 # get the inputs
-#                 inputs, labels = data
-#
-#                 # wrap them in Variable
-#                 if use_gpu:
-#                     inputs = Variable(inputs.cuda())
-#                     labels = Variable(labels.cuda())
-#                 else:
-#                     inputs, labels = Variable(inputs), Variable(labels)
-#
-#                 # zero the parameter gradients
-#                 optimizer.zero_grad()
-#
-#                 # forward
-#                 outputs = model(inputs)
-#                 _, preds = torch.max(outputs.data, 1)
-#                 loss = criterion(outputs, labels)
-#
-#                 # backward + optimize only if in training phase
-#                 if phase == 'train':
-#                     loss.backward()
-#                     optimizer.step()
-#
-#                 # statistics
-#                 running_loss += loss.data[0]
-#                 running_corrects += torch.sum(preds == labels.data)
-#
-#             epoch_loss = running_loss / dataset_sizes[phase]
-#             epoch_acc = running_corrects / dataset_sizes[phase]
-#
-#             print('{} Loss: {:.4f} Acc: {:.4f}'.format(
-#                 phase, epoch_loss, epoch_acc))
-#
-#             # deep copy the model
-#             if phase == 'val' and epoch_acc > best_acc:
-#                 best_acc = epoch_acc
-#                 best_model_wts = model.state_dict()
-#
-#         print()
-#
-#     time_elapsed = time.time() - since
-#     print('Training complete in {:.0f}m {:.0f}s'.format(
-#         time_elapsed // 60, time_elapsed % 60))
-#     print('Best val Acc: {:4f}'.format(best_acc))
-#
-#     # load best model weights
-#     model.load_state_dict(best_model_wts)
-#     return model
-
-model = train_model(model, criterion, optimizer_ft, exp_lr_scheduler,
-                       num_epochs=25)
+train_model(model, criterion, optimizer_ft, exp_lr_scheduler, num_epochs=40)
 
 # torch.save(model, 'Thynet.pkl')  # 保存整个神经网络的结构和模型参数
 # torch.save(model.state_dict(), 'Thynet.pkl')  # 只保存神经网络的模型参数
