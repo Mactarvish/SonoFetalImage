@@ -14,6 +14,7 @@ from scipy import signal
 import cv2
 from sklearn import metrics
 import torch
+import datetime
 
 image_path = './IU22Frame/%d.png'
 save_path = "./IU22Result/%d.png"
@@ -23,6 +24,29 @@ def get_num_lines(file_name):
     with open(file_name, "r") as f:
         context = f.readlines()
         return len(context)
+
+def compose_filepath(path, filename):
+    '''
+    path最后可以有任意多个'/'，处理成只有1个之后与filename拼接。
+    :param path: 
+    :param filename: 
+    :return: 
+    '''
+    if path.endswith('/'):
+        index = len(path) - 1
+        while path[index] == '/':
+            index -= 1
+            if index == -1:
+                break
+        index += 1
+        # print(index)
+        path = path[0: index + 1]
+    else:
+        path = path + '/'
+    full_path = path + filename
+    # print(full_path)
+
+    return full_path
 
 def RenameFile(original_dir, original_filename, new_filename):
     '''
@@ -124,12 +148,27 @@ def save_rected_image(frame, positions):
     image.save(path)
     del painter
 
-def display(*inputs, ion=True):
-    assert len(inputs) < 10, "number of inputs must be smaller than 10"
+def create_gif(images, gif_name, duration=0.2):
+    '''
+    把images里的图像排成一个gif动态图，每帧的间隔是duration
+    :param images: np组成的列表，例如[img1_np, img2_np, img3_np]
+    :param gif_name: 
+    :return: 
+    '''
+    import imageio
+    frames = []
+    for image_name in images:
+        frames.append(image_name)
+        # Save them as frames into a gif
+    imageio.mimsave(gif_name, frames, 'GIF', duration=duration)
+    return
 
-    if ion:
+def display(*inputs, delay_off=None):
+    assert len(inputs) < 10, "number of inputs must be smaller than 10"
+    # need some delay_off, turn plt to interactive mode
+    if delay_off != None:
         plt.ion()
-    else:
+    if delay_off == None:
         plt.ioff()
     # transfer string(file path), nparray, PILImage all to nparray
     image_arrays = []
@@ -150,11 +189,14 @@ def display(*inputs, ion=True):
         plt.subplot(100 + num_images * 10 + i)
         plt.imshow(image_arrays[i - 1])
 
-        # Note: If not block in ioff, when the first image shown in ion and the second one shown in ioff, the second image
-        # can NOT be shown (maybe the switch of interactive status causes that first image blocks the process.
+    # Note: If not block in ioff, when the first image shown in ion and the second one shown in ioff, the second image
+    # can NOT be shown (maybe the switch of interactive status causes that first image blocks the process.
+    if delay_off == None:
         plt.pause(1)
-    if not ion:
-        plt.show()
+    else:
+        plt.pause(delay_off)
+    # if not ion:
+    plt.show()
 
 # Resize an array to 'new_shape' using bilinear interpolation.
 def resize_image(feature_array, new_shape=(224, 224)):
@@ -226,12 +268,89 @@ def summerize_each_layer(cube):
 def copy_2D_to_3D(array_2D, num_layers):
     return np.tile(array_2D, (num_layers, 1, 1)).transpose((1, 2, 0))
 
+def rgb2gray(rgb_np):
+    '''
+    输入一张3通道的rgb图像（numpy）格式(whc)，返回对应的numpy格式的单通道灰度图
+    :param rgb: 
+    :return: 
+    '''
+    return np.dot(rgb_np[...,:3], [0.2989, 0.5870, 0.1140])
+
+def stack3ctorgb(channels):
+    '''
+    把三张单通道图像堆叠在一起，形成一张rgb图像
+    :param channels: 含有三张单通道图像的list， 例如 [img[..., 0], img[..., 1], img[..., 2]]
+    :return: 
+    '''
+    return np.stack(channels).transpose((1, 2, 0))
+
 # Print detail info of the given np_array.
 def show_detail(np_array, comment=None):
     print(comment, "shape:", np_array.shape, "dtype:", np_array.dtype, "max:", np.max(np_array), "min:", np.min(np_array))
 
-def VisdomDrawLines(*lines, legends=None):
-    #legends must be assigned by legends=... explictly.
+def get_test_image(image_type='np'):
+    image = Image.open('lena_std.tif')
+    if image_type == 'PIL':
+        return image
+    if image_type == 'np' or image_type == 'numpy':
+        return np.asarray(image)
+
+def ConfusionMatrixPng(cm, classlist, title):
+    '''
+    confusion_matrix_vision.ConfusionMatrixPng([temp['confusion_matrix'], temp['confusion_matrix']], title=['a', 'b'],
+                                               classlist=['Soap', 'Price', 'Ghost', 'Nikolai', 'Roach', 'Ozone'])
+    :param cm: [nparray1, nparray2, ...]
+    :param classlist: ['Soap', 'Price', 'Ghost', 'Nikolai', 'Roach', 'Ozone']
+    :param title: ['a', 'b']
+    :return: 
+    '''
+    def matrix_transfer(matrix):
+        '''
+        归一化，把混淆矩阵的每一个值都整到0~1之间
+        :param matrix: 
+        :return: 
+        '''
+        norm_conf = []
+        for i in matrix:
+            a = 0
+            tmp_arr = []
+            a = sum(i, 0)
+            for j in i:
+                tmp_arr.append(float(j) / float(a))
+            norm_conf.append(tmp_arr)
+        return norm_conf
+
+    for i in range(len(cm)):
+        cm[i] = matrix_transfer(cm[i])
+
+    fig = plt.figure(figsize=(10, 5))
+    # fig.set_size_inches(30, 30)
+    plt.clf()
+    num_metrics = len(cm)
+    assert num_metrics < 10
+    assert len(cm) == len(title)
+    BASE_NUM = 100 + num_metrics * 10
+    for i in range(len(cm)):
+        ax = fig.add_subplot(BASE_NUM + i + 1)
+        ax.set_aspect("equal")
+        ax.set_title(title[i])
+        # cmap=plt.cm.jet,
+        res = ax.imshow(np.array(cm[i]),
+                        interpolation='nearest')
+        cb = fig.colorbar(res, shrink=0.7)
+        if i != len(cm)-1:
+            cb.remove()
+    plt.show()
+
+def VisdomDrawLines(*lines, legends=None, title=None):
+    #legends必须显式给定，即这样调用：mu.VisdomDrawLines(train_acc, test_acc, legends=['train', 'test'])
+    '''
+    
+    :param lines: np.array or list e.g: [1,2,3,4,5] or np.asarray([1,2,3,4,5])
+    :param legends: 
+    :param title: 
+    :return: 
+    '''
     point_count = 0
     for i, line in enumerate(lines):
         if i == 0:
@@ -239,11 +358,14 @@ def VisdomDrawLines(*lines, legends=None):
         assert (len(line) == point_count), "all lines must have the same number of points"
 
     Y = np.column_stack(lines)
+    if title == None:
+        title = datetime.datetime.strftime(datetime.datetime.now(), '%H:%M:%S')
     if legends == None:
-        opts = None
+        opts = dict(title=title)
     else:
-        opts = dict(legend=legends)
-    print(legends)
+        opts = dict(legend=legends, title=title)
+    from visdom import Visdom
+    viz = Visdom()
     viz.line(
         Y=Y,
         X=np.linspace(0, Y.shape[0]-1, Y.shape[0]),
@@ -280,36 +402,56 @@ def image2modelinput(file_name, model_input_size=None):
     #print(input)
     return input
 
-def save_matrics_model(y_true, y_pred, losses, net_name, model=None):
-    classify_report    = metrics.classification_report(y_true, y_pred)
+def log_metrics(y_true, y_pred, loss, model, save_path, note=None, save=True, show_detail=True):
+    net_name = model.__class__.__name__
+
+    classify_report    = metrics.classification_report(y_true, y_pred, digits=6)
     confusion_matrix   = metrics.confusion_matrix(y_true, y_pred)
     overall_accuracy   = metrics.accuracy_score(y_true, y_pred)
-    acc_for_each_class = metrics.precision_score(y_true, y_pred, average=None)
-    average_accuracy   = np.mean(acc_for_each_class)
-    score = metrics.accuracy_score(y_true, y_pred)
 
-    print('classify_report : \n', classify_report)
-    print('confusion_matrix : \n', confusion_matrix)
-    print('acc_for_each_class : \n', acc_for_each_class)
-    print('average_accuracy: {0:f}'.format(average_accuracy))
+    top1_error_rate    = 1 - overall_accuracy
+    precision_for_each_class = metrics.precision_score(y_true, y_pred, average=None)
+    average_precision   = np.mean(precision_for_each_class)
+    score = metrics.accuracy_score(y_true, y_pred)
+    if show_detail:
+        print('classify_report : \n', classify_report)
+        print('confusion_matrix : \n', confusion_matrix)
+        print('precision_for_each_class : \n', precision_for_each_class)
+    print('average_precision: {0:f}'.format(average_precision))
     print('overall_accuracy: {0:f}'.format(overall_accuracy))
     print('score: {0:f}'.format(score))
+    print('top-1 error rate: {0:f}'.format(top1_error_rate))
     print()
-    dic = {'net_name': net_name, 'classify_report': classify_report, 'confusion_matrix': confusion_matrix, 'acc_for_each_class': acc_for_each_class,
-     'average_accuracy': average_accuracy, 'overall_accuracy': overall_accuracy, 'score': score, 'losses': losses}
-    # Save metircs record
-    current_best = 0
+    dic = {'net_name': net_name, 'classify_report': classify_report, 'confusion_matrix': confusion_matrix, 'precision_for_each_class': precision_for_each_class,
+     'average_precision': average_precision, 'overall_accuracy': overall_accuracy, 'score': score, 'loss': loss, 'top1_error_rate': top1_error_rate}
+    # 保存指标
+    # if save:
     try:
-        current_best = torch.load('matrics/%s' % (net_name))['score']
+        if note == None:
+            log = torch.load('%s/%s' % (save_path, net_name))
+        else:
+            log = torch.load('%s/%s_%s' % (save_path, net_name, note))
     except:
-        current_best = 0
+        log = []
     finally:
-        if dic['score'] > current_best:
-            print('achieved best in record, save it.')
-            torch.save(dic, 'matrics/%s' % (net_name))
-            if model != None:
-                print('save model.')
-                torch.save(model, 'models/%s.pkl' % (net_name))
+        log.append(dic)
+        if note == None:
+            torch.save(log, '%s/%s' % (save_path, net_name))
+        else:
+            torch.save(log, '%s/%s_%s' % (save_path, net_name, note))
+
+
+
+    # current_best = 0
+    # try:
+    #     current_best = torch.load('metrics/%s' % (net_name))['score']
+    # except:
+    #     current_best = 0
+    # finally:
+    #     if save == True and dic['score'] > current_best:
+    #         print('%s achieved best in record, save it.' % (net_name))
+    #         torch.save(dic, 'metrics/%s' % (net_name))
+    #         torch.save(model, 'models/%s.pkl' % (net_name))
 
 ################################################################ pytorch transformer ################################################################
 class ResizeImage(object):

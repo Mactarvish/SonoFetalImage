@@ -22,13 +22,18 @@ def mydensenet121(pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = DenseNet(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16),
+    model = MyDenseNet(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16),
                      **kwargs)
     if pretrained:
         model_weight = torch.load('densenet121_th.pth')
-        model_weight['features.dilated_conv0.weight'] = nn.init.xavier_normal(torch.Tensor(64, 64, 3, 3))
+        for key in model_weight.keys():
+            # print(key)
+            if 'threshold' in key:
+                model_weight[key] = torch.FloatTensor([1.0])
+        # print(model_weight)
+        # model_weight['features.dilated_conv0.weight'] = nn.init.xavier_normal(torch.Tensor(64, 64, 3, 3))
         model.load_state_dict(model_weight)
-    model.classifier = nn.Linear(model.num_features, 6)
+    model.classifier = nn.Linear(model.num_features, 4)
     return model
 
 
@@ -86,7 +91,7 @@ class _DenseLayer(nn.Sequential):
         self.add_module('conv.2', nn.Conv2d(bn_size * growth_rate, growth_rate,
                         kernel_size=3, stride=1, padding=1, bias=False)),
         self.drop_rate = drop_rate
-        self.threshold = nn.Parameter(torch.Tensor([1.05]))
+        self.threshold = nn.Parameter(torch.Tensor([1.0]))
 
     def forward(self, x):
         new_features = super(_DenseLayer, self).forward(x)
@@ -113,7 +118,7 @@ class _Transition(nn.Sequential):
         self.add_module('pool', nn.AvgPool2d(kernel_size=2, stride=2))
 
 
-class DenseNet(nn.Module):
+class MyDenseNet(nn.Module):
     r"""Densenet-BC model class, based on
     `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`
 
@@ -129,15 +134,15 @@ class DenseNet(nn.Module):
     def __init__(self, growth_rate=32, block_config=(6, 12, 24, 16),
                  num_init_features=64, bn_size=4, drop_rate=0, num_classes=1000):
 
-        super(DenseNet, self).__init__()
+        super(MyDenseNet, self).__init__()
 
         # First convolution
         self.features = nn.Sequential(OrderedDict([
             ('conv0', nn.Conv2d(3, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)),
             ('norm0', nn.BatchNorm2d(num_init_features)),
             ('relu0', nn.ReLU(inplace=True)),
-            # ('pool0', nn.MaxPool2d(kernel_size=3, stride=2, padding=1)),
-            ('dilated_conv0', nn.Conv2d(num_init_features, num_init_features, kernel_size=3, stride=2, padding=1, bias=False))
+            ('pool0', nn.MaxPool2d(kernel_size=3, stride=2, padding=1)),
+            # ('dilated_conv0', nn.Conv2d(num_init_features, num_init_features, kernel_size=3, stride=2, padding=1, bias=False))
         ]))
 
         # Each denseblock

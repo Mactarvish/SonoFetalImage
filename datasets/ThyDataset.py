@@ -34,8 +34,11 @@ import sqlite3
 use_gpu = torch.cuda.is_available()
 image_location = "/home/hdl2/Desktop/MedicalImage/"
 label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "postoperative1": 3, "subacute_thyroiditis1": 4, "subhyperthyreosis1": 5}
+# 去掉术后和亚甲亢
+#label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "subacute_thyroiditis1": 3}
 
-connection = sqlite3.connect("ThyDataset_Shuffled_v100")
+connection = sqlite3.connect("ThyDataset")
+# connection = sqlite3.connect("ThyDataset_Small")
 cu = connection.cursor()
 
 class ThyDataset(Dataset):
@@ -54,14 +57,24 @@ class ThyDataset(Dataset):
         # load training datas
         cu.execute("select * from Train")
         records = cu.fetchall()
+        self.num_train = len(records)
         for record in records:
             self.train_set[record[0]] = record
 
         # load validation datas
         cu.execute("select * from Validation")
         records = cu.fetchall()
+        self.num_test = len(records)
+
         for record in records:
             self.val_set[record[0]] = record
+
+        loaded_set = None
+        if self.train:
+            loaded_set = 'training'
+        else:
+            loaded_set = 'validation'
+        print('Database loaded. %d training images, %d validation images, loaded %s set.\n' % (self.num_train, self.num_test, loaded_set))
 
     def __getitem__(self, item):
         record = None
@@ -93,6 +106,7 @@ class ThyDataset(Dataset):
 
     def __len__(self):
         if self.train == True:
-            return 4050
+            return self.num_train
         else:
-            return 600
+            return self.num_test
+
