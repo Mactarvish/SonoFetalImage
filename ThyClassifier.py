@@ -21,6 +21,7 @@ import cv2
 from torchvision import datasets, models, transforms, utils
 import sqlite3
 import datetime
+import copy
 
 from models.resnet_th import resnet_th
 from models.my_densenet import mydensenet121
@@ -169,33 +170,6 @@ def calculate_loss(model_output, target, task):
 
     return loss
 
-# @log(save=False, show_detail=False)
-# def train(model, criterion, optimizer, scheduler, epoch):
-#     model.train(True)
-#     if scheduler != None:
-#         scheduler.step()
-#     for (input, label) in train_loader:
-#         optimizer.zero_grad()
-#         # optimizer_2.zero_grad()
-#
-#         # 准备数据
-#         # input_fft = t2t_fft(input)
-#         # print(torch.cat([input_fft, input], 1).shape)
-#         input, label = Tensor2Variable_CEL(input, label)
-#         # run the model
-#         output = model(input)
-#
-#         calculate_loss(output, label, task='r')
-#
-#         _, prediction = torch.max(output.data, 1)
-#         loss = criterion(output, label)
-#         loss.backward()
-#         optimizer.step()
-#         # if epoch > 8:
-#         #     optimizer_2.step()
-#         # print(model.state_dict()['layer1.1.threshold_2'])
-#         yield prediction, label.data, loss.cpu().data.numpy()[0]
-
 def nums2onehots(labels):
     '''
     把[0,2,1] 转换为[[1,0,0],
@@ -222,27 +196,80 @@ def mixup(p, image1_np, image2_np):
     new = np.uint8(new)
     return new
 
-def random_mix(p, image1_np, image2_np):
+
+def random_mix(p, image1_np, image2_np, scale=1):
     '''
     给定概率p，混合得到的图像有p的区域来源于image1_np，有1-p的区域来源于image2_np
     :param p: 
-    :param image1_np: 
+    :param image1_np: cwh NOT whc
     :param image2_np: 
-    :return: 
+    :return: cwh
     '''
+    # cwh -> whc
+    image1_np = mu.np_channels2c_last(image1_np)
+    image2_np = mu.np_channels2c_last(image2_np)
     assert image1_np.shape == image2_np.shape
-    pm = np.random.binomial(1, p, image1_np.shape[:2])
-    new = np.uint8(np.zeros(image1_np.shape))
+    def roundingplus1(x, d):
+        # f(x) = [x] if x is integer, otherwise [x] + 1
+        assert d > 0 and x > d
+        if x / d == x // d:
+            return x // d
+        else:
+            return x // d + 1
+    pm = np.random.binomial(1, p, (roundingplus1(image1_np.shape[0], scale), roundingplus1(image1_np.shape[1], scale)))
+    patches1 = scatter_image(image1_np, scale=scale)
+    patches2 = scatter_image(image2_np, scale=scale)
+    new_patches = copy.deepcopy(patches2)
 
     for i in range(len(pm)):
         for j in range(len(pm[i])):
             if pm[i][j] == 1:
-                new[i, j, :] = image1_np[i, j, :]
+                new_patches[i][j] = patches1[i][j]
             else:
-                new[i, j, :] = image2_np[i, j, :]
-    return new
+                new_patches[i][j] = patches2[i][j]
+    new_sample = unscatter_images(new_patches)
+    # whc -> cwh
+    new_sample = mu.np_channels2c_first(new_sample)
 
-def augument_data(inputs, labels_oh, strategy, num_augumented=5, aug_factor=0.8):
+    return new_sample
+
+
+def scatter_image(image_np, scale):
+    '''
+    把image_np分解为若干scale*scale的小图块
+    :param image_np: whc
+    :param scale: 
+    :return: 
+    '''
+    patches = []
+    for i in range(0, image_np.shape[0], scale):
+        row = []
+        for j in range(0, image_np.shape[1], scale):
+            patch = image_np[i: i + scale, j: j + scale]
+            row.append(patch)
+        patches.append(row)
+    return patches
+
+
+def unscatter_images(patches):
+    '''
+    把打碎的图片碎片拼合为一张图片
+    example:
+    [[i1, i2, i3],      [- - -
+     [i4, i5, i6],  ->   - - -
+     [i7, i8, i9]]       - - -] 
+    :param patches: list of lists of image_nps
+    :return: np
+    '''
+    integeral_rows = []
+    for row in patches:
+        integeral_row = np.column_stack(row)
+        integeral_rows.append(integeral_row)
+    integeral_image_np = np.row_stack(integeral_rows)
+    return integeral_image_np
+
+
+def augument_data(inputs, labels_oh, strategy, num_augumented=5):
     '''
     增广前后，数据类型应当保持不变（Done）
     对一个batch的数据进行增广。（增广num_augumented个样本）
@@ -252,8 +279,6 @@ def augument_data(inputs, labels_oh, strategy, num_augumented=5, aug_factor=0.8)
     :return: 
     '''
     assert strategy == 'mixup' or strategy == 'random_mix'
-    assert aug_factor == 'random' or type(aug_factor) == float
-    assert aug_factor != 0
     # 先把输入都转换为numpy类型
     inputs = inputs.numpy()
     labels_oh = labels_oh.numpy()
@@ -261,10 +286,8 @@ def augument_data(inputs, labels_oh, strategy, num_augumented=5, aug_factor=0.8)
     combinations = np.random.randint(0, inputs.shape[0], size=(num_augumented, 2))
     new_inputs = []
     new_labels = []
-    if aug_factor == 'random':
-        aug_factor = np.random.uniform(0.5, 1, inputs.shape[0])
-    elif type(aug_factor) == float:
-        aug_factor = np.ones(inputs.shape[0]) * aug_factor
+
+    aug_factor = np.random.uniform(0.5, 1, inputs.shape[0])
     for i, cp in enumerate(combinations):
         input1, label1_oh = inputs[cp[0]], labels_oh[cp[0]]
         input2, label2_oh = inputs[cp[1]], labels_oh[cp[1]]
@@ -272,7 +295,7 @@ def augument_data(inputs, labels_oh, strategy, num_augumented=5, aug_factor=0.8)
         # 随机混合
         mixed_input = None
         if strategy == 'random_mix':
-            mixed_input = random_mix(aug_factor[i], input1, input2)
+            mixed_input = random_mix(aug_factor[i], input1, input2, scale=current_random_mix_scale)
         elif strategy == 'mixup':
             mixed_input = mixup(aug_factor[i], input1, input2)
         mixed_label = aug_factor[i] * label1_oh + (1-aug_factor[i]) * label2_oh
@@ -297,7 +320,7 @@ def augument_data(inputs, labels_oh, strategy, num_augumented=5, aug_factor=0.8)
     return all_inputs, all_labels
 
 @log(save=False, show_detail=False, calculate_metrics=False)
-def train(model, task, criterion, optimizer, scheduler, epoch, augmentation_strategy, aug_factor):
+def train(model, task, criterion, optimizer, scheduler, epoch, augmentation_strategy):
     model.train(True)
     if scheduler != None:
         scheduler.step()
@@ -305,8 +328,8 @@ def train(model, task, criterion, optimizer, scheduler, epoch, augmentation_stra
         optimizer.zero_grad()
         labels = nums2onehots(labels)
         # 增广之后，labels都是one-hot-like
-        if aug_factor != 0:
-            inputs, labels = augument_data(inputs, labels, strategy=augmentation_strategy, aug_factor=aug_factor)
+        if augmentation_strategy != None:
+            inputs, labels = augument_data(inputs, labels, strategy=augmentation_strategy)
         inputs, labels = Tensor2Variable(inputs, labels, loss_type='LSM')
         # run the model
         output = model(inputs)
@@ -351,14 +374,24 @@ def test(model, criterion, epoch):
 #         )
 # group0 = [resnet_th(pretrained=True), mydensenet121(pretrained=False)]
 # group1 = [models.resnet18(pretrained=True), models.densenet121(pretrained=True), vgg]
+def GetFileName(scales):
+    filenames = []
+    for s in scales:
+        name = 'rm_' + str(s)
+        filenames.append(name)
+    return filenames
 
 current_save_folder = 'metrics'
 if not os.path.exists(current_save_folder):
     os.makedirs(current_save_folder)
+
 note = None
+random_mix_scales_global = [70, 90, 110]
+filenames = GetFileName(random_mix_scales_global)
+
 for model in [nn.Sequential(models.resnet18(pretrained=True), nn.Linear(1000, NUM_CLASSES))]:
-    for data_aug_pro, note in zip([0.5, 0, 0.8, 'random'], ['rm_0.5', 'rm_0', 'rm_0.8', 'rm_random']):
-        torch.cuda.set_device(0)
+    for current_random_mix_scale, note in zip(random_mix_scales_global, filenames):
+        torch.cuda.set_device(1)
         epochs = 50
         criterion = nn.CrossEntropyLoss()
         model = model.cuda()
@@ -371,7 +404,7 @@ for model in [nn.Sequential(models.resnet18(pretrained=True), nn.Linear(1000, NU
             print('-' * 10)
             since = time.time()
 
-            train(model, 'r', criterion, optimizer, exp_lr_scheduler, epoch=epoch, augmentation_strategy='random_mix', aug_factor=data_aug_pro)
+            train(model, 'r', criterion, optimizer, exp_lr_scheduler, epoch=epoch, augmentation_strategy='mixup')
             test(model, criterion, epoch=epoch)
 
             time_diff = time.time() - since

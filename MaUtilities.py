@@ -14,6 +14,7 @@ from scipy import signal
 import cv2
 from sklearn import metrics
 import torch
+import torchvision
 import datetime
 
 image_path = './IU22Frame/%d.png'
@@ -163,12 +164,18 @@ def create_gif(images, gif_name, duration=0.2):
     imageio.mimsave(gif_name, frames, 'GIF', duration=duration)
     return
 
-def display(*inputs, delay_off=None):
+def display(*inputs, delay_offs=None):
+    '''
+    显示图片
+    :param inputs: 图片们
+    :param delay_offs: None：不阻塞；number：延迟delay_offs（s）后显示下一张图或退出
+    :return: 
+    '''
     assert len(inputs) < 10, "number of inputs must be smaller than 10"
-    # need some delay_off, turn plt to interactive mode
-    if delay_off != None:
+    # need some delay_offs, turn plt to interactive mode
+    if delay_offs != None:
         plt.ion()
-    if delay_off == None:
+    if delay_offs == None:
         plt.ioff()
     # transfer string(file path), nparray, PILImage all to nparray
     image_arrays = []
@@ -191,16 +198,46 @@ def display(*inputs, delay_off=None):
 
     # Note: If not block in ioff, when the first image shown in ion and the second one shown in ioff, the second image
     # can NOT be shown (maybe the switch of interactive status causes that first image blocks the process.
-    if delay_off == None:
+    if delay_offs == None:
         plt.pause(1)
     else:
-        plt.pause(delay_off)
+        plt.pause(delay_offs)
     # if not ion:
     plt.show()
 
+def make_grid(*images_np, nrow=8, padding=2):
+    '''
+    把若干图片按栅格形状组合成一张图片，每张图的间隙为padding, 一行最多nrow张图
+    example:
+    r = make_grid(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], nrow=4, padding=50)
+    :param images_np: cwh or whc（transform to cwh later)
+    :param padding: 
+    :return: 
+    '''
+    if type(images_np[0]) == list:
+        images_np = images_np[0]
+    image_size = images_np[0].shape
+    for image in images_np:
+        assert image_size == image.shape
+
+    image_block = np.stack(images_np)
+    # nwhc -> ncwh
+    # POTENTIAL BUG: w and h CANNOT be 3
+    if image_block.shape[-1] == 1 or image_block.shape[-1] == 3:
+        image_block = image_block.transpose(0, 3, 1, 2)
+    image_block = torch.from_numpy(image_block)
+    return np.uint8(torchvision.utils.make_grid(image_block, nrow=nrow, padding=padding).numpy()).transpose(1, 2, 0)
+
 # Resize an array to 'new_shape' using bilinear interpolation.
 def resize_image(feature_array, new_shape=(224, 224)):
+    '''
+    :param feature_array: 
+    :param new_shape: 
+    :return: wh(2d) whc(3d) nwhc(4d)
+    '''
     shape_PIL = (new_shape[1], new_shape[0])
+    if len(feature_array.shape) == 2:
+        return np.asarray(Image.fromarray(feature_array).resize(shape_PIL, Image.BILINEAR))
     if len(feature_array.shape) == 3:
         return np.asarray([np.asarray(Image.fromarray(feature_array[:, :, i]).resize(shape_PIL, Image.BILINEAR))
                         for i in range(feature_array.shape[-1])]).transpose(1, 2, 0)
@@ -276,6 +313,56 @@ def rgb2gray(rgb_np):
     '''
     return np.dot(rgb_np[...,:3], [0.2989, 0.5870, 0.1140])
 
+def check_if_cfirst(image_np):
+    '''
+    Check if image_np is cfirst (cwh or ncwh)
+    :param image_np: 
+    :return: 
+    '''
+    assert len(image_np.shape) == 4 or len(image_np.shape) == 3
+    if (image_np.shape[-1] == 1 or image_np.shape[-1] == 3):
+        return False
+    else:
+        return True
+
+def np_channels2c_last(image_np):
+    '''
+    transform ncwh to nwhc or cwh to whc
+    POTENTIAL BUG: w and h CANNOT be 3
+    :param image_np: 
+    :return: 
+    '''
+    assert len(image_np.shape) == 4 or len(image_np.shape) == 3
+    # if already c last, return image_np
+    if not check_if_cfirst(image_np):
+        return image_np
+    if len(image_np.shape) == 4:
+        # ncwh -> nwhc
+        image_np = image_np.transpose(0, 2, 3, 1)
+    else:
+        # cwh -> whc
+        image_np = image_np.transpose(1, 2, 0)
+    return image_np
+
+def np_channels2c_first(image_np):
+    '''
+    transform nwhc to ncwh or whc to cwh
+    POTENTIAL BUG: w and h CANNOT be 3
+    :param image_np: 
+    :return: 
+    '''
+    assert len(image_np.shape) == 4 or len(image_np.shape) == 3
+    # if already c first, return image_np
+    if check_if_cfirst(image_np):
+        return image_np
+    if len(image_np.shape) == 4:
+        # nwhc -> ncwh
+        image_np = image_np.transpose(0, 3, 1, 2)
+    else:
+        # whc -> cwh
+        image_np = image_np.transpose(2, 0, 1)
+    return image_np
+
 def stack3ctorgb(channels):
     '''
     把三张单通道图像堆叠在一起，形成一张rgb图像
@@ -289,6 +376,11 @@ def show_detail(np_array, comment=None):
     print(comment, "shape:", np_array.shape, "dtype:", np_array.dtype, "max:", np.max(np_array), "min:", np.min(np_array))
 
 def get_test_image(image_type='np'):
+    '''
+    
+    :param image_type: 
+    :return: whc
+    '''
     image = Image.open('lena_std.tif')
     if image_type == 'PIL':
         return image
@@ -334,12 +426,17 @@ def ConfusionMatrixPng(cm, classlist, title):
         ax = fig.add_subplot(BASE_NUM + i + 1)
         ax.set_aspect("equal")
         ax.set_title(title[i])
-        # cmap=plt.cm.jet,
-        res = ax.imshow(np.array(cm[i]),
+        plt.yticks(fontsize=5)
+        plt.xticks(fontsize=5)
+        # classlist = ['', '', '', '', '']
+        plt.yticks(range(len(classlist)), classlist)
+        plt.xticks(range(len(classlist)), classlist, rotation=-90)
+        res = ax.imshow(np.array(cm[i]), cmap=plt.cm.plasma,
                         interpolation='nearest')
-        cb = fig.colorbar(res, shrink=0.7)
+        cb = fig.colorbar(res, shrink=0.3)
         if i != len(cm)-1:
             cb.remove()
+    plt.savefig('confusion_matrix.png', dpi=500)
     plt.show()
 
 def VisdomDrawLines(*lines, legends=None, title=None):
