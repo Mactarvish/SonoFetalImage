@@ -2,7 +2,6 @@ import os
 import torch
 from skimage import io, transform
 import MaUtilities as mu
-import shutil
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
@@ -17,39 +16,30 @@ from torchvision.models import vgg
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 import time
-import cv2
 from torchvision import datasets, models, transforms, utils
-import sqlite3
 import datetime
 import copy
 from FPO import FPO
-import queue
 
 from models.resnet_th import resnet_th
 from models.my_densenet import mydensenet121
 from models.verify_net import VerifyNet
 from models.preact_resnet import PreActResNet18
-from datasets.ThyDataset import ThyDataset
+import datasets.ThyDataset as ThyDataset
+import datasets.cifar10 as cifar10
+# from datasets.ThyDataset import ThyDataset
 
-
-use_gpu = torch.cuda.is_available()
-image_location = "/home/hdl2/Desktop/SonoFetalImage/ThyImage/"
-# label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "postoperative1": 3, "subacute_thyroiditis1": 4, "subhyperthyreosis1": 5}
-NUM_CLASSES = 6
-DATA_AUGUMENTATION = True
+NUM_CLASSES = 10
+AUGMENTATION_STRATEGY = None
 # torch.manual_seed(55)
 # torch.cuda.manual_seed(59)
 
-transformer = transforms.Compose([
-    mu.ResizeImage((255, 255)),
-    # mu.ResizeImage((299, 299)),
-    transforms.ToTensor(), # range [0, 255] -> [0.0,1.0]
-    transforms.Normalize(mean=[0.333, 0.0586, 0.023], std=[0.265, 0.138, 0.0224])
-    ]
-)
-# [0.33381739584119885, 0.05862841105989082, 0.023407234558809612], [0.26509894104564447, 0.13794070296714034, 0.022363285181095156]
-train_loader = DataLoader(ThyDataset(train=True, image_transform=transformer, pre_transform=None),  shuffle=True, batch_size=5, num_workers=5)
-val_loader   = DataLoader(ThyDataset(train=False, image_transform=transformer, pre_transform=None), shuffle=True, batch_size=5, num_workers=5)
+print(torch.cuda.is_available())
+train_loader = DataLoader(cifar10.Cifar10(train=True,  dataset_size=1/5, image_transform=cifar10.transformer), shuffle=False, batch_size=10, num_workers=10)
+val_loader   = DataLoader(cifar10.Cifar10(train=False, dataset_size=1/5, image_transform=cifar10.transformer), shuffle=False, batch_size=10, num_workers=10)
+
+# train_loader = DataLoader(ThyDataset.ThyDataset(train=True, image_transform=ThyDataset.transformer, pre_transform=None),  shuffle=True, batch_size=5, num_workers=5)
+# val_loader   = DataLoader(ThyDataset.ThyDataset(train=False, image_transform=ThyDataset.transformer, pre_transform=None), shuffle=True, batch_size=5, num_workers=5)
 
 # model = resnet_th(pretrained=True)
 # model = VerifyNet(input_shape=(255, 255, 3), num_classes=6)
@@ -84,7 +74,7 @@ def Tensor2Variable(input, label, loss_type):
     """
     :param input: Torch.Tensor
     :param label: Torch.Tensor
-    :return: Torch.Tensor.cuda() obey CrossEntropyLoss type
+    :return: 
     """
     assert loss_type == 'CEL' or loss_type == 'LSM'
     input = Variable(input).cuda().float()
@@ -110,7 +100,7 @@ def t2t_fft(tensor_nchw):
     f_amplify = torch.from_numpy(f_amplify).float()
     return f_amplify
 
-def log(save, show_detail, calculate_metrics=True):
+def log(train, save, show_detail, calculate_metrics=True):
     '''
     :param save: 是否把指标保存成为本地文件
     :param show_detail: 是否在程序运行过程中print指标
@@ -136,39 +126,34 @@ def log(save, show_detail, calculate_metrics=True):
 
             log_loss = epoch_loss
             if calculate_metrics:
-                mu.log_metrics(log_y_trues, log_y_predictions, log_loss, model=model, save=save,
+                mu.log_metrics(train, log_y_trues, log_y_predictions, log_loss, model=model, save=save,
                                show_detail=show_detail, save_path=current_save_folder, note=NOTE)
         return wrapper
     return decorator
 
-def calculate_loss(model_output, target, task):
+def calculate_loss(model_output, target):
     '''
-    对于分类任务，直接CrossEntropyLoss计算loss
-    对于回归任务，先把target每个都one-shot向量化再用LogSoftmax计算loss，由于增广之后labels都是one-hot-like
+    由于2018.5.6把任务统一作为了回归任务处理，所以target都是one-hot-like，用LogSoftmax计算loss
     :param model_output: 
-    :param target: [0,2,5,2,1,3]
-    :param task: 
+    :param target: [0,2,5,2,1,3]的one-hot Variable/Tensor
     :return: 
     '''
-    assert task == 'c' or task == 'r'
-    if task == 'r':
-        # print('model_output:')
-        # print(model_output)
-        # print('target:')
-        # print(target)
-        # print('target(numpy):')
-        # print(target.cpu().data.numpy())
-        target_np = target.cpu().data.numpy()
-        if not DATA_AUGUMENTATION:
-            target_np = mu.to_categorical(target_np, num_classes=NUM_CLASSES)
-        target = Variable(torch.from_numpy(target_np)).cuda()
-        # print(target)
-        m = nn.LogSoftmax()
-        loss = -m(model_output) * target
-        loss = torch.sum(loss) / 128
-    else:
-        criterion = nn.CrossEntropyLoss()
-        loss = criterion(model_output, target)
+    assert isinstance(target, Variable) or isinstance(target, torch.Tensor)
+    # target_np = None
+    # if isinstance(target, Variable):
+    #     target_np = target.cpu().data.numpy()
+    # if isinstance(target, torch.Tensor):
+    #     target_np = target.cpu().numpy()
+    # # if AUGMENTATION_STRATEGY == None:
+    # #     target_np = mu.to_categorical(target_np, num_classes=NUM_CLASSES)
+    # target = Variable(torch.from_numpy(target_np)).cuda()
+
+    m = nn.LogSoftmax()
+    t = -m(model_output)
+    if not isinstance(target, Variable):
+        target = Variable(target).cuda()
+    loss = t * target
+    loss = torch.sum(loss) / 128
 
     return loss
 
@@ -178,10 +163,8 @@ def nums2onehots(labels):
                     [0,0,1],
                     [0,1,0]]
     :param labels: LongTensor of size n
-    :return: 
+    :return: FloatTensor
     '''
-    for i in labels:
-        mu.to_categorical(i, NUM_CLASSES)
     oh_np = mu.to_categorical(labels.numpy(), num_classes=NUM_CLASSES)
     return torch.from_numpy(oh_np).float()
 
@@ -387,8 +370,8 @@ class MaSGD(optim.SGD):
 
         return loss
 
-class GI_lr_opt():
-    def __init__(self, optimizer, model, task, last_epoch=-1):
+class GILR():
+    def __init__(self, optimizer, model, last_epoch=-1):
         if last_epoch == -1:
             for group in optimizer.param_groups:
                 group.setdefault('initial_lr', group['lr'])
@@ -400,16 +383,19 @@ class GI_lr_opt():
         self.optimizer = optimizer
         self.base_lrs = list(map(lambda group: group['initial_lr'], optimizer.param_groups))
         self.model = model
-        self.task = task
 
-    def step(self, inputs, labels):
+    def step(self, inputs, labels, epoch):
         self.inputs = inputs
         self.labels = labels
-
+        # if epoch < 5:
+        #     for param_group in self.optimizer.param_groups:
+        #         param_group['lr'] = 0.005
+        # elif 5 <= epoch < 10:
+        #     for param_group in self.optimizer.param_groups:
+        #         param_group['lr'] = 0.0005
+        # else:
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
             param_group['lr'] = lr
-
-
 
     def get_lr(self):
         def test_fun(lrs):
@@ -428,17 +414,16 @@ class GI_lr_opt():
             # 试验完毕，回退原先状态
             self.optimizer.step_back()
 
-            loss = calculate_loss(output, self.labels, task=self.task)
+            loss = calculate_loss(output, self.labels)
             loss_float = loss.cpu().data.numpy()
             return loss_float
-
-        fpo = FPO(test_fun, iterations_num=1, stop_loss_min=0.0001, pop_size=10, p=0.8, dim=len(self.base_lrs), val_min=0.00001, val_max=0.5)
+        fpo = FPO(test_fun, iterations_num=1, stop_loss_min=0.0001, pop_size=3, p=0.8, dim=len(self.base_lrs), val_min=0.00001, val_max=0.5)
         loss, lrs = fpo.run()
 
         return lrs
 
-@log(save=False, show_detail=False, calculate_metrics=False)
-def train(model, task, criterion, optimizer, scheduler, epoch, augmentation_strategy):
+@log(train=True, save=True, show_detail=True, calculate_metrics=True)
+def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
     model.train(True)
     if not GI:
         scheduler.step()
@@ -452,17 +437,13 @@ def train(model, task, criterion, optimizer, scheduler, epoch, augmentation_stra
         # run the model
         output = model(inputs)
 
-        loss = calculate_loss(output, labels, task=task)
-        prediction = None
-        if task == 'c':
-            _, prediction = torch.max(output.data, dim=1) # float
-        else:
-            prediction = output.data # LongTensor
+        loss = calculate_loss(output, labels)
+        prediction = output.data # LongTensor
         loss.backward()
 
-        # FODPSO ICS GI
+        # FODPSO ICS FPA
         if GI:
-            scheduler.step(inputs, labels)
+            scheduler.step(inputs, labels, epoch)
         optimizer.step()
 
         prediction_cpu = prediction.cpu()
@@ -470,7 +451,7 @@ def train(model, task, criterion, optimizer, scheduler, epoch, augmentation_stra
         loss_cpu = loss.cpu().data.numpy()[0]
         yield prediction_cpu, label_cpu, loss_cpu
 
-@log(save=True, show_detail=True)
+@log(train=False, save=True, show_detail=True)
 def test(model, criterion, epoch):
     model.train(False)
     for (input, label) in val_loader:
@@ -478,6 +459,8 @@ def test(model, criterion, epoch):
         output = model(input)
         _, prediction = torch.max(output.data, 1)
         loss = criterion(output, label)
+        regression_loss = calculate_loss(output, nums2onehots(label.cpu().data))
+        loss = regression_loss
         loss_cpu = loss.cpu().data.numpy()[0]
         yield prediction, label.data, loss_cpu
 
@@ -501,53 +484,61 @@ if not os.path.exists(current_save_folder):
 GI = True
 NOTE = None
 
-filenames = None
-device = None
 if GI:
-    filenames = ['GI']
-    device = 0
+    NOTE = 'GI'
 else:
-    filenames = ['normal']
-    device = 1
-TASK = 'r'
-for model in [nn.Sequential(models.resnet18(pretrained=True), nn.Linear(1000, NUM_CLASSES))]:
-    for NOTE in filenames:
-        torch.cuda.set_device(device)
-        epochs = 50
-        criterion = nn.CrossEntropyLoss()
-        model = model.cuda()
+    NOTE = 'normal'
 
+resnet18 = nn.Sequential(models.resnet18(pretrained=True), nn.Linear(1000, NUM_CLASSES))
+# densenet121 = nn.Sequential(models.densenet121(pretrained=True), nn.Linear(1000, NUM_CLASSES))
 
-        def divide_model_params(model):
-            assert isinstance(model, nn.Sequential)
-            if isinstance(model[0], models.ResNet):
-                trainable_models = [model[0].conv1, model[0].bn1, model[0].layer1, model[0].layer2, model[0].layer3, model[0].layer4, model[0].fc]  # len = 7
-                trainable_models.append(model[1])
-                params = [x.parameters() for x in trainable_models]
-                params_dict = [{'params': p} for p in params]
+for model in [resnet18]:
+    NOTE = NOTE #+ model[0].__class__.__name__
+    freer_gpu = mu.get_freer_gpu()
+    print('using gpu %d' % freer_gpu)
+    torch.cuda.set_device(freer_gpu)
+    epochs = 50
+    criterion = nn.CrossEntropyLoss()
+    model = model.cuda()
 
-                return params_dict
-            else:
-                return model.parameters()
+    def divide_model_params(model):
+        assert isinstance(model, nn.Sequential)
+        if isinstance(model[0], models.ResNet):
+            trainable_models = [model[0].conv1, model[0].bn1, model[0].layer1, model[0].layer2, model[0].layer3, model[0].layer4, model[0].fc]  # len = 7
+            trainable_models.append(model[1])
+            params = [x.parameters() for x in trainable_models]
+            params_dict = [{'params': p} for p in params]
 
-        optimizer = None
-        scheduler = None
-        if GI:
-            optimizer = MaSGD(divide_model_params(model), lr=0.005, momentum=0.8, weight_decay=0)
-            scheduler = GI_lr_opt(optimizer, model=model, task=TASK, last_epoch=-1)
-        else:
-            optimizer = optim.SGD(divide_model_params(model), lr=0.005, momentum=0.8)
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+            return params_dict
+        elif isinstance(model[0], models.DenseNet):
+            trainable_models = [model[0].features.conv0, model[0].features.norm0, model[0].features.norm5, model[0].features.transition1,
+                                model[0].features.transition2, model[0].features.transition3, model[0].features.denseblock1,
+                                model[0].features.denseblock2, model[0].features.denseblock3, model[0].features.denseblock4, model[0].classifier]
+            trainable_models.append(model[1])
+            params = [x.parameters() for x in trainable_models]
+            params_dict = [{'params': p} for p in params]
 
-        for epoch in range(epochs):
-            print('{} Epoch {}/{}'.format(model.__class__.__name__, epoch, epochs))
-            print('-' * 10)
-            since = time.time()
+            return params_dict
 
-            train(model, TASK, criterion, optimizer, scheduler, epoch=epoch, augmentation_strategy=None)
-            test(model, criterion, epoch=epoch)
+    optimizer = None
+    scheduler = None
+    if GI:
+        optimizer = MaSGD(divide_model_params(model), lr=0.005, momentum=0, weight_decay=0)
+        scheduler = GILR(optimizer, model=model, last_epoch=-1)
+    else:
+        optimizer = optim.SGD(divide_model_params(model), lr=0.005, momentum=0.8)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
-            time_diff = time.time() - since
-            print('epoch complete in {:0.2f} seconds'.format(time_diff))
-            print()
+    for epoch in range(epochs):
+        print('{} Epoch {}/{}'.format(model.__class__.__name__, epoch, epochs))
+        print('-' * 10)
+        since = time.time()
+
+        train(model, criterion, optimizer, scheduler, epoch=epoch, augmentation_strategy=AUGMENTATION_STRATEGY)
+        test(model, criterion, epoch=epoch)
+
+        time_diff = time.time() - since
+        print('epoch complete in {:0.2f} seconds on gpu {}'.format(time_diff, torch.cuda.current_device()))
+        print()
+
 print('Model execution completed on ' + datetime.datetime.strftime(datetime.datetime.now(), '%H:%M:%S'))

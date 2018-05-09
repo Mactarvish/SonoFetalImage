@@ -492,63 +492,84 @@ def to_categorical(y, num_classes=None):
 
 def image2modelinput(file_name, model_input_size=None):
     image = Image.open(file_name)#.convert('L')
-    image = mu.ResizeImage(model_input_size)(image)
+    image = ResizeImage(model_input_size)(image)
     #input = Variable(transforms.ToTensor()(image).cuda())
     #torch.squeeze()
     input = Variable(torch.unsqueeze(transforms.ToTensor()(image), dim=0).cuda())
     #print(input)
     return input
 
-def log_metrics(y_true, y_pred, loss, model, save_path, note=None, save=True, show_detail=True):
+def get_freer_gpu():
+    '''
+    # TODO
+    os.system('nvidia-smi -q  >tmp')
+        Utilization
+        Gpu                         : 0 %
+    :return: 
+    '''
+    import os
+    os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free >tmp')
+    memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
+    return int(np.argmax(memory_available))
+
+def log_metrics(train, y_true, y_pred, loss, model, save_path, note=None, save=True, show_detail=True):
     net_name = model.__class__.__name__
+    if train:
+        print('loss:', loss)
+        dic = {'loss': loss}
+    else:
+        classify_report    = metrics.classification_report(y_true, y_pred, digits=6)
+        confusion_matrix   = metrics.confusion_matrix(y_true, y_pred)
+        overall_accuracy   = metrics.accuracy_score(y_true, y_pred)
 
-    classify_report    = metrics.classification_report(y_true, y_pred, digits=6)
-    confusion_matrix   = metrics.confusion_matrix(y_true, y_pred)
-    overall_accuracy   = metrics.accuracy_score(y_true, y_pred)
-
-    top1_error_rate    = 1 - overall_accuracy
-    precision_for_each_class = metrics.precision_score(y_true, y_pred, average=None)
-    average_precision   = np.mean(precision_for_each_class)
-    score = metrics.accuracy_score(y_true, y_pred)
-    if show_detail:
-        print('classify_report : \n', classify_report)
-        print('confusion_matrix : \n', confusion_matrix)
-        print('precision_for_each_class : \n', precision_for_each_class)
-    print('average_precision: {0:f}'.format(average_precision))
-    print('overall_accuracy: {0:f}'.format(overall_accuracy))
-    print('score: {0:f}'.format(score))
-    print('top-1 error rate: {0:f}'.format(top1_error_rate))
-    print()
-    dic = {'net_name': net_name, 'classify_report': classify_report, 'confusion_matrix': confusion_matrix, 'precision_for_each_class': precision_for_each_class,
-     'average_precision': average_precision, 'overall_accuracy': overall_accuracy, 'score': score, 'loss': loss, 'top1_error_rate': top1_error_rate}
+        top1_error_rate    = 1 - overall_accuracy
+        precision_for_each_class = metrics.precision_score(y_true, y_pred, average=None)
+        average_precision   = np.mean(precision_for_each_class)
+        score = metrics.accuracy_score(y_true, y_pred)
+        if show_detail:
+            print('classify_report : \n', classify_report)
+            print('confusion_matrix : \n', confusion_matrix)
+            print('precision_for_each_class : \n', precision_for_each_class)
+        print('loss:', loss)
+        print('average_precision: {0:f}'.format(average_precision))
+        print('overall_accuracy: {0:f}'.format(overall_accuracy))
+        print('score: {0:f}'.format(score))
+        print('top-1 error rate: {0:f}'.format(top1_error_rate))
+        print()
+        dic = {'net_name': net_name, 'classify_report': classify_report, 'confusion_matrix': confusion_matrix, 'precision_for_each_class': precision_for_each_class,
+         'average_precision': average_precision, 'overall_accuracy': overall_accuracy, 'score': score, 'loss': loss, 'top1_error_rate': top1_error_rate}
     # 保存指标
+    if save:
+        train_str = 'train' if train else 'test'
+        try:
+            if note == None:
+                log = torch.load('%s/%s' % (save_path, train_str))
+            else:
+                log = torch.load('%s/%s_%s' % (save_path, note, train_str))
+        except:
+            log = []
+        finally:
+            log.append(dic)
+            if note == None:
+                torch.save(log, '%s/%s' % (save_path, train_str))
+            else:
+                torch.save(log, '%s/%s_%s' % (save_path, note, train_str))
+
     # if save:
-    try:
-        if note == None:
-            log = torch.load('%s/%s' % (save_path, net_name))
-        else:
-            log = torch.load('%s/%s_%s' % (save_path, net_name, note))
-    except:
-        log = []
-    finally:
-        log.append(dic)
-        if note == None:
-            torch.save(log, '%s/%s' % (save_path, net_name))
-        else:
-            torch.save(log, '%s/%s_%s' % (save_path, net_name, note))
-
-
-
-    # current_best = 0
-    # try:
-    #     current_best = torch.load('metrics/%s' % (net_name))['score']
-    # except:
-    #     current_best = 0
-    # finally:
-    #     if save == True and dic['score'] > current_best:
-    #         print('%s achieved best in record, save it.' % (net_name))
-    #         torch.save(dic, 'metrics/%s' % (net_name))
-    #         torch.save(model, 'models/%s.pkl' % (net_name))
+    #     train_str = 'train' if train else 'test'
+    #     try:
+    #         if note == None:
+    #             log = torch.load('%s/%s_%s' % (save_path, net_name, train_str))
+    #         else:
+    #             log = torch.load('%s/%s_%s_%s' % (save_path, net_name, note, train_str))
+    #     except:
+    #         log = []
+    #     finally:
+    #         log.append(dic)
+    #         if note == None:
+    #             torch.save(log, '%s/%s_%s' % (save_path, net_name, train_str))
+    #         else:
+    #             torch.save(log, '%s/%s_%s_%s' % (save_path, net_name, note, train_str))
 
 ################################################################ pytorch transformer ################################################################
 class ResizeImage(object):
