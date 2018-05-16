@@ -6,7 +6,6 @@ Created on Mon Apr 10 10:01:45 2017
 
 A utilities library for simple data process.
 """
-
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image, ImageDraw
@@ -16,6 +15,7 @@ from sklearn import metrics
 import torch
 import torchvision
 import datetime
+from torch.autograd import Variable
 
 image_path = './IU22Frame/%d.png'
 save_path = "./IU22Result/%d.png"
@@ -264,6 +264,17 @@ def Gaussian_2D(center, shape, sigma = 0.1):
 
 # Judge equality of two same-shape array ignoring tiny difference.
 def is_equal(a, b, error=0.0001):
+    '''
+    比较a和b是否几乎完全相同，可以是Variable或者nparray
+    :param a: 
+    :param b: 
+    :param error: 
+    :return: 
+    '''
+    if isinstance(a, Variable):
+        a = a.cpu().data.numpy()
+    if isinstance(b, Variable):
+        b = b.cpu().data.numpy()
     assert a.shape == b.shape, "Two arrays must be the same shape."
     return np.sum(abs(a - b)) < error
 

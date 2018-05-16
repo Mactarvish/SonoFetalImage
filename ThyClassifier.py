@@ -19,7 +19,9 @@ import time
 from torchvision import datasets, models, transforms, utils
 import datetime
 import copy
+from colorama import Fore
 from FPO import FPO
+from FPA_optimizer import FPA
 
 from models.resnet_th import resnet_th
 from models.my_densenet import mydensenet121
@@ -30,13 +32,19 @@ import datasets.cifar10 as cifar10
 # from datasets.ThyDataset import ThyDataset
 
 NUM_CLASSES = 10
+DATASET_SIZE = 1/5
 AUGMENTATION_STRATEGY = None
-# torch.manual_seed(55)
-# torch.cuda.manual_seed(59)
+
+DEBUG_MODE = False
+if DEBUG_MODE:
+    DATASET_SIZE =1/1000
+
+torch.manual_seed(55)
+torch.cuda.manual_seed(59)
 
 print(torch.cuda.is_available())
-train_loader = DataLoader(cifar10.Cifar10(train=True,  dataset_size=1/5, image_transform=cifar10.transformer), shuffle=False, batch_size=10, num_workers=10)
-val_loader   = DataLoader(cifar10.Cifar10(train=False, dataset_size=1/5, image_transform=cifar10.transformer), shuffle=False, batch_size=10, num_workers=10)
+train_loader = DataLoader(cifar10.Cifar10(train=True,  dataset_size=DATASET_SIZE, image_transform=cifar10.transformer), shuffle=False, batch_size=10, num_workers=10)
+val_loader   = DataLoader(cifar10.Cifar10(train=False, dataset_size=DATASET_SIZE, image_transform=cifar10.transformer), shuffle=False, batch_size=10, num_workers=10)
 
 # train_loader = DataLoader(ThyDataset.ThyDataset(train=True, image_transform=ThyDataset.transformer, pre_transform=None),  shuffle=True, batch_size=5, num_workers=5)
 # val_loader   = DataLoader(ThyDataset.ThyDataset(train=False, image_transform=ThyDataset.transformer, pre_transform=None), shuffle=True, batch_size=5, num_workers=5)
@@ -49,26 +57,6 @@ val_loader   = DataLoader(cifar10.Cifar10(train=False, dataset_size=1/5, image_t
 # model = PreActResNet18(num_classes=6)
 # model = mydensenet121(pretrained=True)
 # model = models.densenet121(pretrained=True)
-
-# if use_gpu:
-#     # model = nn.DataParallel(model)
-#     model = model.cuda()
-# l = list(model.named_parameters())
-# list_pet = []
-# list_t = []
-# # layer1.1.threshold_2
-# for e in l:
-#     if 'threshold' not in e[0]:
-#         list_pet.append(e[1])
-#     else:
-#         list_t.append(e[1])
-#
-# def para_exc_threshold():
-#     for e in list_pet:
-#         yield e
-# def para_threshold():
-#     for e in list_t:
-#         yield e
 
 def Tensor2Variable(input, label, loss_type):
     """
@@ -302,11 +290,15 @@ def augument_data(inputs, labels_oh, strategy, num_augumented=5):
     return all_inputs, all_labels
 
 class MaSGD(optim.SGD):
+    '''
+    ！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！如果启用GI weight_decay，这里的weight_decay可能就没什么卵用了
+    '''
     def __init__(self, params, lr, momentum=0, dampening=0,
                  weight_decay=0, nesterov=False):
         super(MaSGD, self).__init__(params, lr=lr, momentum=momentum, dampening=dampening,
                  weight_decay=weight_decay, nesterov=nesterov)
         self.last_dps = []
+        self.last_momentums = []
 
     def step_back(self):
         '''
@@ -314,23 +306,30 @@ class MaSGD(optim.SGD):
         :return: 
         '''
         d_p_g = iter(self.last_dps)
-        loss = None
+        momentum_buffers = iter(self.last_momentums)
 
+        loss = None
         for group in self.param_groups:
+            momentum = group['momentum']
             for p in group['params']:
                 if p.grad is None:
                     continue
-
+                if momentum != 0:
+                    param_state = self.state[p]
+                    last_momentum = next(momentum_buffers)
+                    if last_momentum is None:
+                        param_state.pop('momentum_buffer')
+                    else:
+                        param_state['momentum_buffer'] = last_momentum
                 d_p = next(d_p_g)
                 p.data.add_(group['lr'], d_p)
-                self.last_dps = []
+        self.last_dps = []
+        self.last_momentums = []
 
         return loss
 
-
-    def step(self, closure=None):
+    def step(self, FPA_mode, closure=None):
         """Performs a single optimization step.
-
         Arguments:
             closure (callable, optional): A closure that reevaluates the model
                 and returns the loss.
@@ -344,87 +343,119 @@ class MaSGD(optim.SGD):
             weight_decay = group['weight_decay']
             momentum = group['momentum']
             dampening = group['dampening']
-            nesterov = group['nesterov']
 
             for p in group['params']:
                 if p.grad is None:
                     continue
-                d_p = p.grad.data
-                P_GRAD = p.grad.data.clone()
+                d_p = p.grad.data.clone()
                 if weight_decay != 0:
                     d_p.add_(weight_decay, p.data)
                 if momentum != 0:
                     param_state = self.state[p]
                     if 'momentum_buffer' not in param_state:
-                        buf = param_state['momentum_buffer'] = d_p.clone()
-                    else:
+                        self.last_momentums.append(None)
+                        param_state['momentum_buffer'] = d_p.clone()
                         buf = param_state['momentum_buffer']
-                        buf.mul_(momentum).add_(1 - dampening, d_p)
-                    if nesterov:
-                        d_p = d_p.add(momentum, buf)
                     else:
-                        d_p = buf
-                p.grad.data = P_GRAD
-                self.last_dps.append(d_p)
+                        self.last_momentums.append(param_state['momentum_buffer'].clone())
+                        buf = param_state['momentum_buffer']
+                        buf.mul_(momentum).add_(1 - dampening, d_p) # dp + momentum*last_dp
+                    d_p = buf
+                self.last_dps.append(d_p.clone())
                 p.data.add_(-group['lr'], d_p)
-
+        if not FPA_mode:
+            # 非FPA调优状态，那么本次step后就是下一个mini-batch的初始值
+            self.last_dps = []
+            self.last_momentums = []
         return loss
 
 class GILR():
-    def __init__(self, optimizer, model, last_epoch=-1):
-        if last_epoch == -1:
+    '''
+    为optimizer服务，更新optimizer的param_groups里的每个group里的各种超参数
+    '''
+    def __init__(self, optimizer, model, update_hyparams_names, update_weight_decays, update_momentums, last_epoch=-1):
+        '''
+        
+        :param optimizer: 
+        :param model: 
+        :param update_hyparams_names:  ['lr', 'weight_decay', 'momentum']
+        :param update_weight_decays: 
+        :param update_momentums: 
+        :param last_epoch: 
+        '''
+        self.update_hyparams_names = None
+        if update_hyparams_names == None:
+            raise NotImplementedError
+        elif isinstance(update_hyparams_names, list):
+            self.update_hyparams_names = update_hyparams_names
             for group in optimizer.param_groups:
-                group.setdefault('initial_lr', group['lr'])
+                for p in self.update_hyparams_names:
+                    assert p in group
         else:
-            for i, group in enumerate(optimizer.param_groups):
-                if 'initial_lr' not in group:
-                    raise KeyError("param 'initial_lr' is not specified "
-                                   "in param_groups[{}] when resuming an optimizer".format(i))
+            assert 0
+
         self.optimizer = optimizer
-        self.base_lrs = list(map(lambda group: group['initial_lr'], optimizer.param_groups))
+        self.num_groups = len(self.optimizer.param_groups)
         self.model = model
+        self.update_weight_decays = update_weight_decays
+        self.update_momentums = update_momentums
+        self.fpa = FPA(fitness_function=self.test_fun, num_iteration=1, num_pollen=2, p_lp=0.8, conditions=[(self.num_groups, 0.00001, 0.2)])
 
     def step(self, inputs, labels, epoch):
         self.inputs = inputs
         self.labels = labels
-        # if epoch < 5:
-        #     for param_group in self.optimizer.param_groups:
-        #         param_group['lr'] = 0.005
-        # elif 5 <= epoch < 10:
-        #     for param_group in self.optimizer.param_groups:
-        #         param_group['lr'] = 0.0005
-        # else:
-        for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
-            param_group['lr'] = lr
 
-    def get_lr(self):
-        def test_fun(lrs):
-            '''
-            Loss = test_fun(lrs)
-            :param lrs: 
-            :return: 
-            '''
-            for param_group, lr in zip(self.optimizer.param_groups, lrs):
-                # WARNED
-                param_group['lr'] = lr
+        # 计算超参数
+        hyperparam_groups = self.get_hyperparams() # hyperparam_groups: [[lr_g1, lr_g2, lr_g3], [wd_g1, wd_g2, gd_g3], ...]
+        # 更新optimizer的超参数
+        assert len(hyperparam_groups) == len(self.update_hyparams_names), 'Number of FPA-upated hyperparameters must equal to number of specified params'
+        for hyp, param_group in zip(zip(*hyperparam_groups), self.optimizer.param_groups): # hyp: (lr_g1, wd_g1, mom_g1) param_group: [g1, g2,
+            for (p_key, p_value) in zip(self.update_hyparams_names, hyp):
+                param_group[p_key] = p_value
 
-            # 用当前学习率更新一波参数
-            self.optimizer.step()
-            output = self.model(self.inputs)
-            # 试验完毕，回退原先状态
-            self.optimizer.step_back()
+    def test_fun(self, hyperparams):
+        '''
+        Loss = test_fun(lrs)
+        :param lrs: 
+        :return: 
+        '''
+        assert isinstance(hyperparams, list) and isinstance(hyperparams[0], list)
+        update_hyperparams = {}
+        for i, hyperparam_names in enumerate(self.update_hyparams_names):
+            update_hyperparams[hyperparam_names] = hyperparams[i]
 
-            loss = calculate_loss(output, self.labels)
-            loss_float = loss.cpu().data.numpy()
-            return loss_float
-        fpo = FPO(test_fun, iterations_num=1, stop_loss_min=0.0001, pop_size=3, p=0.8, dim=len(self.base_lrs), val_min=0.00001, val_max=0.5)
-        loss, lrs = fpo.run()
+        for i, param_group in enumerate(self.optimizer.param_groups):
+            for key in update_hyperparams.keys():
+                param_group[key] = update_hyperparams[key][i]
 
-        return lrs
+        # 用当前学习率更新一波参数
+        self.optimizer.step(FPA_mode=True)
+        output = self.model(self.inputs)
+        # 试验完毕，回退原先状态
+        self.optimizer.step_back()
 
-@log(train=True, save=True, show_detail=True, calculate_metrics=True)
+        loss = calculate_loss(output, self.labels)
+        loss_float = loss.cpu().data.numpy()
+        return loss_float
+
+    def get_hyperparams(self):
+        fitness, pollen = self.fpa.run()
+        loss = fitness
+        # print(loss)
+        hyperparam_groups = pollen.components
+
+        return hyperparam_groups
+
+calculate_metrics = True
+show_detail = True
+save = True
+# @log(train=True, save=True, show_detail=False, calculate_metrics=True)
 def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
     model.train(True)
+    log_loss = None
+    log_y_predictions = []
+    log_y_trues = []
+    epoch_loss = 0
     if not GI:
         scheduler.step()
     for (inputs, labels) in train_loader:
@@ -444,25 +475,49 @@ def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
         # FODPSO ICS FPA
         if GI:
             scheduler.step(inputs, labels, epoch)
-        optimizer.step()
+        optimizer.step(FPA_mode=False)
 
         prediction_cpu = prediction.cpu()
         label_cpu = labels.cpu().data
         loss_cpu = loss.cpu().data.numpy()[0]
-        yield prediction_cpu, label_cpu, loss_cpu
 
-@log(train=False, save=True, show_detail=True)
+        for e in prediction_cpu:
+            log_y_predictions.append(e)
+        for e in label_cpu:  # label: LongTensor
+            log_y_trues.append(e)
+        epoch_loss += loss_cpu
+    log_loss = epoch_loss
+    if calculate_metrics:
+        mu.log_metrics(True, log_y_trues, log_y_predictions, log_loss, model=model, save=save,
+                       show_detail=show_detail, save_path=current_save_folder, note=NOTE)
+
+# @log(train=False, save=True, show_detail=False)
 def test(model, criterion, epoch):
     model.train(False)
+    log_loss = None
+    log_y_predictions = []
+    log_y_trues = []
+    epoch_loss = 0
     for (input, label) in val_loader:
         input, label = Tensor2Variable(input, label, loss_type='CEL')
         output = model(input)
+
         _, prediction = torch.max(output.data, 1)
         loss = criterion(output, label)
         regression_loss = calculate_loss(output, nums2onehots(label.cpu().data))
         loss = regression_loss
         loss_cpu = loss.cpu().data.numpy()[0]
-        yield prediction, label.data, loss_cpu
+        # yield prediction, label.data, loss_cpu
+        for e in prediction:
+            log_y_predictions.append(e)
+        for e in label.data:  # label: LongTensor
+            log_y_trues.append(e)
+        epoch_loss += loss_cpu
+    log_loss = epoch_loss
+    if calculate_metrics:
+        mu.log_metrics(False, log_y_trues, log_y_predictions, log_loss, model=model, save=save,
+                       show_detail=show_detail, save_path=current_save_folder, note=NOTE)
+
 
 # vgg=models.vgg16(pretrained=True)
 # vgg.classifier = nn.Sequential(
@@ -481,6 +536,24 @@ current_save_folder = 'metrics'
 if not os.path.exists(current_save_folder):
     os.makedirs(current_save_folder)
 
+if len(os.listdir(current_save_folder)) == 0:
+    print('Metrics folder is empty. Training model.')
+else:
+    if input('Clear metrics folder?') == 'y':
+        def clear_folder(path):
+            ls = os.listdir(path)
+            for i in ls:
+                c_path = os.path.join(path, i)
+                if os.path.isdir(c_path):
+                    clear_folder(c_path)
+                else:
+                    os.remove(c_path)
+        clear_folder(current_save_folder)
+        print('Clear.')
+    else:
+        print('Files kept. Continue?')
+        assert input() == 'y', 'User terminated process.'
+
 GI = True
 NOTE = None
 
@@ -490,41 +563,43 @@ else:
     NOTE = 'normal'
 
 resnet18 = nn.Sequential(models.resnet18(pretrained=True), nn.Linear(1000, NUM_CLASSES))
+verifynet = VerifyNet((3, 32, 32), num_classes=10)
 # densenet121 = nn.Sequential(models.densenet121(pretrained=True), nn.Linear(1000, NUM_CLASSES))
 
 for model in [resnet18]:
-    NOTE = NOTE #+ model[0].__class__.__name__
     freer_gpu = mu.get_freer_gpu()
-    print('using gpu %d' % freer_gpu)
+    NOTE = NOTE + str(freer_gpu)
+    print('Using gpu %d.' % freer_gpu)
+    print(torch.cuda.is_available())
     torch.cuda.set_device(freer_gpu)
     epochs = 50
     criterion = nn.CrossEntropyLoss()
     model = model.cuda()
 
     def divide_model_params(model):
-        assert isinstance(model, nn.Sequential)
-        if isinstance(model[0], models.ResNet):
+        # assert isinstance(model, nn.Sequential)
+        params_dict = None
+        trainable_models = None
+        if isinstance(model, VerifyNet):
+            trainable_models = [model.linear1, model.linear2]
+        elif isinstance(model[0], models.ResNet):
             trainable_models = [model[0].conv1, model[0].bn1, model[0].layer1, model[0].layer2, model[0].layer3, model[0].layer4, model[0].fc]  # len = 7
             trainable_models.append(model[1])
-            params = [x.parameters() for x in trainable_models]
-            params_dict = [{'params': p} for p in params]
-
-            return params_dict
         elif isinstance(model[0], models.DenseNet):
             trainable_models = [model[0].features.conv0, model[0].features.norm0, model[0].features.norm5, model[0].features.transition1,
                                 model[0].features.transition2, model[0].features.transition3, model[0].features.denseblock1,
                                 model[0].features.denseblock2, model[0].features.denseblock3, model[0].features.denseblock4, model[0].classifier]
             trainable_models.append(model[1])
-            params = [x.parameters() for x in trainable_models]
-            params_dict = [{'params': p} for p in params]
 
-            return params_dict
+        params = [x.parameters() for x in trainable_models]
+        params_dict = [{'params': p} for p in params]
+        return params_dict
 
     optimizer = None
     scheduler = None
     if GI:
-        optimizer = MaSGD(divide_model_params(model), lr=0.005, momentum=0, weight_decay=0)
-        scheduler = GILR(optimizer, model=model, last_epoch=-1)
+        optimizer = MaSGD(divide_model_params(model), lr=0.005, momentum=0, weight_decay=0) # 0.0003
+        scheduler = GILR(optimizer, model=model, update_hyparams_names=['lr'], update_weight_decays=False, update_momentums=False, last_epoch=-1)
     else:
         optimizer = optim.SGD(divide_model_params(model), lr=0.005, momentum=0.8)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
