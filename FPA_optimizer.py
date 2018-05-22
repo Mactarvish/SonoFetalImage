@@ -185,9 +185,16 @@ class FPA(object):
         self.best_pollen = (np.inf, None)
         self.inited = False
 
-    def run(self):
+    def run(self, epoch):
+        if epoch % 5 == 0 and epoch != 0:
+            if len(self.conditions) > 1:
+                raise NotImplementedError
+            self.conditions[0] = (self.conditions[0][0], self.conditions[0][1], self.conditions[0][2]/10)
         if not self.inited:
             self.init_pollens()
+            # self.inited = True
+        else:
+            self.init_pollens(self.pollens)
         self.update_best_pollen()
 
         for i in range(self.num_iteration):
@@ -195,23 +202,32 @@ class FPA(object):
             self.update_best_pollen()
         return self.best_pollen
 
-    def init_pollens(self):
-        self.pollens = []
+    def init_pollens(self, existed_pollens=None):
         self.fitnesses = []
-        for i in range(self.num_pollen):
-            components = []
-            for c in self.conditions:
-                dim, lower, upper = c
-                g = [(lower + upper) / 2] * dim
-                for i in range(len(g)):
-                    g[i] += float(np.random.uniform(-(upper-lower)/2, (upper-lower)/2))
-                components.append(g)
-            self.pollens.append(Pollen(components))
+        self.best_pollen = (np.inf, None)
+        # 未指定用于初始化的花粉，从每个子组的上下限中采样花粉
+        if existed_pollens is None:
+            self.pollens = []
+            for i in range(self.num_pollen):
+                components = []
+                for c in self.conditions:
+                    dim, lower, upper = c
+                    g = [(lower + upper) / 2] * dim
+                    for i in range(len(g)):
+                        g[i] += float(np.random.uniform(-(upper-lower)/2, (upper-lower)/2))
+                    components.append(g)
+                self.pollens.append(Pollen(components))
+        #指定了用于初始化的花粉，直接初始化
+        else:
+            assert len(existed_pollens) == self.num_pollen
+            self.pollens = existed_pollens
         assert len(self.pollens) == self.num_pollen
+
         debug(self.pollens)
         for p in self.pollens:
             fitness = self.calculate_fitness(p)
             self.fitnesses.append(fitness)
+        assert len(self.fitnesses) == self.num_pollen
         debug(self.fitnesses)
 
     def calculate_fitness(self, pollen):
@@ -230,6 +246,7 @@ class FPA(object):
 
     def global_pollination(self, i):
         levy_vector = levy_flight(self.pollen_dim)
+        delta = levy_vector * (self.best_pollen[1] - self.pollens[i])
         new_pollen = self.pollens[i] + levy_vector * (self.best_pollen[1] - self.pollens[i])
         unrectified_pollen = new_pollen
         rectified_pollen, fitness = self.check_new_pollen(new_pollen, i)
@@ -237,13 +254,29 @@ class FPA(object):
         return rectified_pollen, fitness
 
     def local_pollination(self, i):
+        C_i = 0
+        E_i_j = []
+        for j in range(self.num_pollen):
+            if self.fitnesses[j] < self.fitnesses[i]:
+                E_i_j.append(1)
+            else:
+                E_i_j.append(0)
+        for k in range(self.num_pollen):
+            Q_k_num = E_i_j[k] / self.fitnesses[k]
+            Q_k_den = sum([a + 1/b for a, b in zip(E_i_j, self.fitnesses)])
+            Q_i_k = Q_k_num / Q_k_den
+            C_i += Q_i_k * (self.fitnesses[k] - self.fitnesses[i])
+        C_i = C_i
+
         indexes = sample(range(0, self.num_pollen), 2)
         pollen1 = self.pollens[indexes[0]]
         pollen2 = self.pollens[indexes[1]]
         mixed_pollen = pollen1 + pollen2
         e = list(np.random.rand(self.pollen_dim))
         tmp = mixed_pollen * e
-        new_pollen = self.pollens[i] + tmp
+        global_item = list(levy_flight(self.pollen_dim) * C_i)
+        new_pollen = self.pollens[i] + tmp# + global_item
+        new_pollen += global_item
         unrectified_pollen = new_pollen
         rectified_pollen, fitness = self.check_new_pollen(new_pollen, i)
         # 为了方便调试，返回当前解

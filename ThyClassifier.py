@@ -1,15 +1,11 @@
 import os
 import torch
-from skimage import io, transform
 import MaUtilities as mu
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
 from torch.optim import lr_scheduler
-import matplotlib.pyplot as plt
-from PIL import Image
-import math
 from torch.utils.data import Dataset, DataLoader
 from torch.autograd import Variable
 from torchvision.models import vgg
@@ -27,6 +23,8 @@ from models.resnet_th import resnet_th
 from models.my_densenet import mydensenet121
 from models.verify_net import VerifyNet
 from models.preact_resnet import PreActResNet18
+from models.mutibranch_resnet import branch_resnet18, MultibranchResNet
+from models.multiway_resnet import MultiwayResnet_AllTrained, MultiwayResnet_FcTrained
 import datasets.ThyDataset as ThyDataset
 import datasets.cifar10 as cifar10
 # from datasets.ThyDataset import ThyDataset
@@ -37,14 +35,14 @@ AUGMENTATION_STRATEGY = None
 
 DEBUG_MODE = False
 if DEBUG_MODE:
-    DATASET_SIZE =1/1000
+    DATASET_SIZE =1/500
 
 torch.manual_seed(55)
 torch.cuda.manual_seed(59)
 
 print(torch.cuda.is_available())
-train_loader = DataLoader(cifar10.Cifar10(train=True,  dataset_size=DATASET_SIZE, image_transform=cifar10.transformer), shuffle=False, batch_size=10, num_workers=10)
-val_loader   = DataLoader(cifar10.Cifar10(train=False, dataset_size=DATASET_SIZE, image_transform=cifar10.transformer), shuffle=False, batch_size=10, num_workers=10)
+train_loader = DataLoader(cifar10.Cifar10(train=True,  dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=7, num_workers=7)
+val_loader   = DataLoader(cifar10.Cifar10(train=False, dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=7, num_workers=7)
 
 # train_loader = DataLoader(ThyDataset.ThyDataset(train=True, image_transform=ThyDataset.transformer, pre_transform=None),  shuffle=True, batch_size=5, num_workers=5)
 # val_loader   = DataLoader(ThyDataset.ThyDataset(train=False, image_transform=ThyDataset.transformer, pre_transform=None), shuffle=True, batch_size=5, num_workers=5)
@@ -317,19 +315,20 @@ class MaSGD(optim.SGD):
                 if momentum != 0:
                     param_state = self.state[p]
                     last_momentum = next(momentum_buffers)
-                    if last_momentum is None:
+                    if last_momentum == None:
                         param_state.pop('momentum_buffer')
                     else:
                         param_state['momentum_buffer'] = last_momentum
                 d_p = next(d_p_g)
                 p.data.add_(group['lr'], d_p)
-        self.last_dps = []
-        self.last_momentums = []
+                self.last_dps = []
+                self.last_momentums = []
 
         return loss
 
     def step(self, FPA_mode, closure=None):
         """Performs a single optimization step.
+
         Arguments:
             closure (callable, optional): A closure that reevaluates the model
                 and returns the loss.
@@ -343,6 +342,7 @@ class MaSGD(optim.SGD):
             weight_decay = group['weight_decay']
             momentum = group['momentum']
             dampening = group['dampening']
+            nesterov = group['nesterov']
 
             for p in group['params']:
                 if p.grad is None:
@@ -354,14 +354,16 @@ class MaSGD(optim.SGD):
                     param_state = self.state[p]
                     if 'momentum_buffer' not in param_state:
                         self.last_momentums.append(None)
-                        param_state['momentum_buffer'] = d_p.clone()
-                        buf = param_state['momentum_buffer']
+                        buf = param_state['momentum_buffer'] = d_p.clone()
                     else:
-                        self.last_momentums.append(param_state['momentum_buffer'].clone())
+                        self.last_momentums.append(param_state['momentum_buffer'])
                         buf = param_state['momentum_buffer']
-                        buf.mul_(momentum).add_(1 - dampening, d_p) # dp + momentum*last_dp
-                    d_p = buf
-                self.last_dps.append(d_p.clone())
+                        buf.mul_(momentum).add_(1 - dampening, d_p)
+                    if nesterov:
+                        d_p = d_p.add(momentum, buf)
+                    else:
+                        d_p = buf
+                self.last_dps.append(d_p)
                 p.data.add_(-group['lr'], d_p)
         if not FPA_mode:
             # 非FPA调优状态，那么本次step后就是下一个mini-batch的初始值
@@ -399,55 +401,58 @@ class GILR():
         self.model = model
         self.update_weight_decays = update_weight_decays
         self.update_momentums = update_momentums
-        self.fpa = FPA(fitness_function=self.test_fun, num_iteration=1, num_pollen=2, p_lp=0.8, conditions=[(self.num_groups, 0.00001, 0.2)])
+
 
     def step(self, inputs, labels, epoch):
         self.inputs = inputs
         self.labels = labels
 
-        # 计算超参数
-        hyperparam_groups = self.get_hyperparams() # hyperparam_groups: [[lr_g1, lr_g2, lr_g3], [wd_g1, wd_g2, gd_g3], ...]
-        # 更新optimizer的超参数
+        hyperparam_groups = self.get_hyperparams(epoch) # hyperparam_groups: [[lr_g1, lr_g2, lr_g3], [wd_g1, wd_g2, gd_g3], ...]
         assert len(hyperparam_groups) == len(self.update_hyparams_names), 'Number of FPA-upated hyperparameters must equal to number of specified params'
         for hyp, param_group in zip(zip(*hyperparam_groups), self.optimizer.param_groups): # hyp: (lr_g1, wd_g1, mom_g1) param_group: [g1, g2,
             for (p_key, p_value) in zip(self.update_hyparams_names, hyp):
                 param_group[p_key] = p_value
 
-    def test_fun(self, hyperparams):
-        '''
-        Loss = test_fun(lrs)
-        :param lrs: 
-        :return: 
-        '''
-        assert isinstance(hyperparams, list) and isinstance(hyperparams[0], list)
-        update_hyperparams = {}
-        for i, hyperparam_names in enumerate(self.update_hyparams_names):
-            update_hyperparams[hyperparam_names] = hyperparams[i]
+    def get_hyperparams(self, epoch):
+        def test_fun(hyperparams):
+            '''
+            Loss = test_fun(lrs)
+            :param lrs: 
+            :return: 
+            '''
+            assert isinstance(hyperparams, list) and isinstance(hyperparams[0], list)
+            update_hyperparams = {}
+            for i, hyperparam_names in enumerate(self.update_hyparams_names):
+                update_hyperparams[hyperparam_names] = hyperparams[i]
 
-        for i, param_group in enumerate(self.optimizer.param_groups):
-            for key in update_hyperparams.keys():
-                param_group[key] = update_hyperparams[key][i]
+            for i, param_group in enumerate(self.optimizer.param_groups):
+                for key in update_hyperparams.keys():
+                    param_group[key] = update_hyperparams[key][i]
 
-        # 用当前学习率更新一波参数
-        self.optimizer.step(FPA_mode=True)
-        output = self.model(self.inputs)
-        # 试验完毕，回退原先状态
-        self.optimizer.step_back()
+            # b = copy.deepcopy(self.optimizer.param_groups)
+            # c = copy.deepcopy(self.optimizer.state)
+            # 用当前学习率更新一波参数
+            self.optimizer.step(FPA_mode=True)
+            output = self.model(self.inputs)
+            # 试验完毕，回退原先状态
+            self.optimizer.step_back()
+            # bb = copy.deepcopy(self.optimizer.param_groups)
+            # cv = copy.deepcopy(self.optimizer.state)
+            # del b,c,bb,cv
 
-        loss = calculate_loss(output, self.labels)
-        loss_float = loss.cpu().data.numpy()
-        return loss_float
+            loss = calculate_loss(output, self.labels)
+            loss_float = loss.cpu().data.numpy()
+            return loss_float
 
-    def get_hyperparams(self):
-        fitness, pollen = self.fpa.run()
+        fpa = FPA(fitness_function=test_fun, num_iteration=1, num_pollen=2, p_lp=0.8, conditions=[(self.num_groups, 0.00001, 0.2)])
+        fitness, pollen = fpa.run(epoch)
         loss = fitness
-        # print(loss)
         hyperparam_groups = pollen.components
 
         return hyperparam_groups
 
 calculate_metrics = True
-show_detail = True
+show_detail = False
 save = True
 # @log(train=True, save=True, show_detail=False, calculate_metrics=True)
 def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
@@ -467,7 +472,6 @@ def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
         inputs, labels = Tensor2Variable(inputs, labels, loss_type='LSM')
         # run the model
         output = model(inputs)
-
         loss = calculate_loss(output, labels)
         prediction = output.data # LongTensor
         loss.backward()
@@ -475,7 +479,12 @@ def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
         # FODPSO ICS FPA
         if GI:
             scheduler.step(inputs, labels, epoch)
-        optimizer.step(FPA_mode=False)
+            optimizer.step(FPA_mode=True)
+        else:
+            optimizer.step()
+        # for p in optimizer.param_groups:
+        #     print(p['lr'])
+        #     print('\n')
 
         prediction_cpu = prediction.cpu()
         label_cpu = labels.cpu().data
@@ -502,6 +511,14 @@ def test(model, criterion, epoch):
         input, label = Tensor2Variable(input, label, loss_type='CEL')
         output = model(input)
 
+        # test_precisions = torch.load('precision_01')
+        # output_np = output.cpu().data.numpy()
+        # output_np_weighted = np.zeros(shape=output_np.shape)
+        # for i in range(output_np.shape[0]):
+        #     for j in range(output_np.shape[1]):
+        #         output_np_weighted[i, j] = test_precisions[j][0] * output_np[i, j] if output_np[i,j] < 0.5 else test_precisions[j][1] * output_np[i, j]
+        # _, prediction_weighted = torch.max(torch.FloatTensor(output_np_weighted), 1)
+
         _, prediction = torch.max(output.data, 1)
         loss = criterion(output, label)
         regression_loss = calculate_loss(output, nums2onehots(label.cpu().data))
@@ -518,7 +535,6 @@ def test(model, criterion, epoch):
         mu.log_metrics(False, log_y_trues, log_y_predictions, log_loss, model=model, save=save,
                        show_detail=show_detail, save_path=current_save_folder, note=NOTE)
 
-
 # vgg=models.vgg16(pretrained=True)
 # vgg.classifier = nn.Sequential(
 #             nn.Linear(512 * 7 * 7, 4096),
@@ -532,29 +548,8 @@ def test(model, criterion, epoch):
 # group0 = [resnet_th(pretrained=True), mydensenet121(pretrained=False)]
 # group1 = [models.resnet18(pretrained=True), models.densenet121(pretrained=True), vgg]
 
-current_save_folder = 'metrics'
-if not os.path.exists(current_save_folder):
-    os.makedirs(current_save_folder)
 
-if len(os.listdir(current_save_folder)) == 0:
-    print('Metrics folder is empty. Training model.')
-else:
-    if input('Clear metrics folder?') == 'y':
-        def clear_folder(path):
-            ls = os.listdir(path)
-            for i in ls:
-                c_path = os.path.join(path, i)
-                if os.path.isdir(c_path):
-                    clear_folder(c_path)
-                else:
-                    os.remove(c_path)
-        clear_folder(current_save_folder)
-        print('Clear.')
-    else:
-        print('Files kept. Continue?')
-        assert input() == 'y', 'User terminated process.'
-
-GI = True
+GI = False
 NOTE = None
 
 if GI:
@@ -562,8 +557,10 @@ if GI:
 else:
     NOTE = 'normal'
 
+# brnet = branch_resnet18()
 resnet18 = nn.Sequential(models.resnet18(pretrained=True), nn.Linear(1000, NUM_CLASSES))
 verifynet = VerifyNet((3, 32, 32), num_classes=10)
+multiway_resnet = MultiwayResnet_FcTrained()
 # densenet121 = nn.Sequential(models.densenet121(pretrained=True), nn.Linear(1000, NUM_CLASSES))
 
 for model in [resnet18]:
@@ -572,7 +569,37 @@ for model in [resnet18]:
     print('Using gpu %d.' % freer_gpu)
     print(torch.cuda.is_available())
     torch.cuda.set_device(freer_gpu)
-    epochs = 50
+
+    metrics_folder_name = input('metrics folder: ')
+    if metrics_folder_name == 'l':
+        metrics_folder_name = torch.load('last_metrics_folder_name')
+        print('metrics saved to %s' % metrics_folder_name)
+    else:
+        torch.save(metrics_folder_name, 'last_metrics_folder_name')
+    current_save_folder = 'metrics/%s/gpu%d' % (metrics_folder_name, freer_gpu)
+    if not os.path.exists(current_save_folder):
+        os.makedirs(current_save_folder)
+    if len(os.listdir(current_save_folder)) == 0:
+        print('Metrics folder is empty. Training model.')
+    else:
+        if input('Clear metrics folder?') == 'y':
+            def clear_folder(path):
+                ls = os.listdir(path)
+                for i in ls:
+                    c_path = os.path.join(path, i)
+                    if os.path.isdir(c_path):
+                        clear_folder(c_path)
+                    else:
+                        os.remove(c_path)
+
+
+            clear_folder(current_save_folder)
+            print('Clear.')
+        else:
+            print('Files kept. Continue?')
+            assert input() == 'y', 'User terminated process.'
+
+    epochs = 100
     criterion = nn.CrossEntropyLoss()
     model = model.cuda()
 
@@ -580,6 +607,10 @@ for model in [resnet18]:
         # assert isinstance(model, nn.Sequential)
         params_dict = None
         trainable_models = None
+        if isinstance(model, MultibranchResNet) or isinstance(model, MultiwayResnet_AllTrained):
+            return model.parameters()
+        if isinstance(model, MultiwayResnet_FcTrained):
+            return model.fc_ways.parameters()
         if isinstance(model, VerifyNet):
             trainable_models = [model.linear1, model.linear2]
         elif isinstance(model[0], models.ResNet):
@@ -598,15 +629,15 @@ for model in [resnet18]:
     optimizer = None
     scheduler = None
     if GI:
-        optimizer = MaSGD(divide_model_params(model), lr=0.005, momentum=0, weight_decay=0) # 0.0003
+        optimizer = MaSGD(divide_model_params(model), lr=0.005, momentum=0.8, weight_decay=0.0003)
         scheduler = GILR(optimizer, model=model, update_hyparams_names=['lr'], update_weight_decays=False, update_momentums=False, last_epoch=-1)
     else:
         optimizer = optim.SGD(divide_model_params(model), lr=0.005, momentum=0.8)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.8)#multiway_resnet_lr0.5
 
     for epoch in range(epochs):
         print('{} Epoch {}/{}'.format(model.__class__.__name__, epoch, epochs))
-        print('-' * 10)
+        print('-' * 10, ' ', datetime.datetime.strftime(datetime.datetime.now(), '%H:%M:%S'))
         since = time.time()
 
         train(model, criterion, optimizer, scheduler, epoch=epoch, augmentation_strategy=AUGMENTATION_STRATEGY)

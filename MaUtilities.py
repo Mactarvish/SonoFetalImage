@@ -16,6 +16,8 @@ import torch
 import torchvision
 import datetime
 from torch.autograd import Variable
+from colorama import Fore
+from torchvision import transforms
 
 image_path = './IU22Frame/%d.png'
 save_path = "./IU22Result/%d.png"
@@ -526,29 +528,29 @@ def get_freer_gpu():
 def log_metrics(train, y_true, y_pred, loss, model, save_path, note=None, save=True, show_detail=True):
     net_name = model.__class__.__name__
     if train:
-        print('loss:', loss)
+        print('training loss:', loss)
         dic = {'loss': loss}
     else:
         classify_report    = metrics.classification_report(y_true, y_pred, digits=6)
         confusion_matrix   = metrics.confusion_matrix(y_true, y_pred)
         overall_accuracy   = metrics.accuracy_score(y_true, y_pred)
-
         top1_error_rate    = 1 - overall_accuracy
         precision_for_each_class = metrics.precision_score(y_true, y_pred, average=None)
         average_precision   = np.mean(precision_for_each_class)
-        score = metrics.accuracy_score(y_true, y_pred)
+        f1_score = metrics.f1_score(y_true, y_pred, average='micro')
+
         if show_detail:
             print('classify_report : \n', classify_report)
             print('confusion_matrix : \n', confusion_matrix)
             print('precision_for_each_class : \n', precision_for_each_class)
-        print('loss:', loss)
+        print('test loss:', loss)
         print('average_precision: {0:f}'.format(average_precision))
-        print('overall_accuracy: {0:f}'.format(overall_accuracy))
-        print('score: {0:f}'.format(score))
+        print(Fore.RED, 'overall_accuracy: {0:f}'.format(overall_accuracy), Fore.BLACK)
+        print('f1-score: {0:f}'.format(f1_score))
         print('top-1 error rate: {0:f}'.format(top1_error_rate))
         print()
         dic = {'net_name': net_name, 'classify_report': classify_report, 'confusion_matrix': confusion_matrix, 'precision_for_each_class': precision_for_each_class,
-         'average_precision': average_precision, 'overall_accuracy': overall_accuracy, 'score': score, 'loss': loss, 'top1_error_rate': top1_error_rate}
+         'average_precision': average_precision, 'overall_accuracy': overall_accuracy, 'f1_score': f1_score, 'loss': loss, 'top1_error_rate': top1_error_rate}
     # 保存指标
     if save:
         train_str = 'train' if train else 'test'
@@ -560,27 +562,25 @@ def log_metrics(train, y_true, y_pred, loss, model, save_path, note=None, save=T
         except:
             log = []
         finally:
+            # 保存指标
             log.append(dic)
             if note == None:
                 torch.save(log, '%s/%s' % (save_path, train_str))
             else:
                 torch.save(log, '%s/%s_%s' % (save_path, note, train_str))
+            # 保存模型
+            if not train:
+                max_f1_score = 0
+                for d in log:
+                    f1_score = d['f1_score']
+                    if f1_score > max_f1_score:
+                        max_f1_score = f1_score
+                if f1_score >= max_f1_score:
+                    if note == None:
+                        torch.save(model, '%s/%s.pkl' % (save_path, net_name))
+                    else:
+                        torch.save(model, '%s/%s_%s.pkl' % (save_path, note, net_name))
 
-    # if save:
-    #     train_str = 'train' if train else 'test'
-    #     try:
-    #         if note == None:
-    #             log = torch.load('%s/%s_%s' % (save_path, net_name, train_str))
-    #         else:
-    #             log = torch.load('%s/%s_%s_%s' % (save_path, net_name, note, train_str))
-    #     except:
-    #         log = []
-    #     finally:
-    #         log.append(dic)
-    #         if note == None:
-    #             torch.save(log, '%s/%s_%s' % (save_path, net_name, train_str))
-    #         else:
-    #             torch.save(log, '%s/%s_%s_%s' % (save_path, net_name, note, train_str))
 
 ################################################################ pytorch transformer ################################################################
 class ResizeImage(object):
