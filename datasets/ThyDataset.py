@@ -110,3 +110,11 @@ class ThyDataset(Dataset):
         else:
             return self.num_test
 
+transformer = transforms.Compose([
+    mu.ResizeImage((255, 255)),
+    # transforms.RandomCrop(32, padding=4),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(), # range [0, 255] -> [0.0,1.0]
+    transforms.Normalize(mean=[0.333, 0.0586, 0.023], std=[0.265, 0.138, 0.0224])
+    ]
+)

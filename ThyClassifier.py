@@ -16,7 +16,6 @@ from torchvision import datasets, models, transforms, utils
 import datetime
 import copy
 from colorama import Fore
-from FPO import FPO
 from FPA_optimizer import FPA
 
 from models.resnet_th import resnet_th
@@ -549,7 +548,7 @@ def test(model, criterion, epoch):
 # group1 = [models.resnet18(pretrained=True), models.densenet121(pretrained=True), vgg]
 
 
-GI = False
+GI = True
 NOTE = None
 
 if GI:
@@ -560,7 +559,7 @@ else:
 # brnet = branch_resnet18()
 resnet18 = nn.Sequential(models.resnet18(pretrained=True), nn.Linear(1000, NUM_CLASSES))
 verifynet = VerifyNet((3, 32, 32), num_classes=10)
-multiway_resnet = MultiwayResnet_FcTrained()
+# multiway_resnet = MultiwayResnet_FcTrained()
 # densenet121 = nn.Sequential(models.densenet121(pretrained=True), nn.Linear(1000, NUM_CLASSES))
 
 for model in [resnet18]:
@@ -629,7 +628,7 @@ for model in [resnet18]:
     optimizer = None
     scheduler = None
     if GI:
-        optimizer = MaSGD(divide_model_params(model), lr=0.005, momentum=0.8, weight_decay=0.0003)
+        optimizer = MaSGD(divide_model_params(model), lr=0.005, momentum=0.8, weight_decay=0)
         scheduler = GILR(optimizer, model=model, update_hyparams_names=['lr'], update_weight_decays=False, update_momentums=False, last_epoch=-1)
     else:
         optimizer = optim.SGD(divide_model_params(model), lr=0.005, momentum=0.8)

@@ -64,6 +64,12 @@ def RenameFile(original_dir, original_filename, new_filename):
     print("rename file %s to %s in %s" % (str(original_filename), str(new_filename), str(original_dir)))
 
 def get_line(file_name, line_index):
+    '''
+    获取文本文件的第line_index行的内容
+    :param file_name: 
+    :param line_index: 
+    :return: 
+    '''
     context = None
     with open(file_name, "r") as f:
         context = f.readlines()
@@ -71,6 +77,13 @@ def get_line(file_name, line_index):
 
 
 def replace_line(file_name, line_index, new_context):
+    '''
+    替换文本文件的第line_index行的内容为new_context
+    :param file_name: 
+    :param line_index: 
+    :param new_context: 
+    :return: 
+    '''
     context = None
     with open(file_name, "r") as f:
         context = f.readlines()
@@ -92,20 +105,15 @@ def BilinearInterpolation(feature_array, new_shape=(224, 224)):
         return np.asarray([np.asarray(Image.fromarray(feature_array[0, :, :, i]).resize(new_shape, Image.BILINEAR))
                         for i in range(feature_array.shape[-1])]).transpose(1, 2, 0)
 
-'''
-# add a Hann window to feature.
-def hann2D(feature):
-    assert feature.shape[:2] == (224, 224), "Hann2D : feature must be (224, 224)."
-    window = signal.hann(224 * 224).reshape((224, 224))
-    if len(feature.shape) == 3:
-        window = copy_2D_to_3D(window, feature.shape[-1])
-        return feature * window * window.transpose(1, 0, 2)
-    if len(feature.shape) == 2:
-        return feature * window * window.transpose()
-'''
+
 
 # add a Hann window to feature.
 def hann2D(feature):
+    '''
+    生成一个和feature相同大小的hann窗并与feature相乘，返回结果
+    :param feature: 
+    :return: 
+    '''
     width = feature.shape[0]
     height = feature.shape[1]
     window = np.dot(signal.hann(width).reshape((width, 1)), signal.hann(height).reshape((1, height)))
@@ -113,43 +121,6 @@ def hann2D(feature):
         window = copy_2D_to_3D(window, feature.shape[-1])
 
     return feature * window
-
-# Translate an image file to an numpy array.
-def image_to_array(file_name):
-    # RGB
-    if type(file_name) == int:
-        file_name = image_path % file_name
-    image = Image.open(file_name)
-    return np.asarray(image)[..., 0: 3]
-
-# def save_rected_image(frame, positions):
-#     plt.subplot(111)
-#     path = image_path % frame
-#     plt.imshow(image_to_array(path))
-#     width = 20
-#     colors = ['red', 'green', 'blue', 'yellow']
-#     color_index = 0
-#     for position in positions:
-#         rect = plt.Rectangle((position[1] - width // 2, position[0] - width // 2), width, width,
-#                              linewidth=1, alpha=1, facecolor='none', edgecolor=colors[color_index % len(colors)])
-#         plt.subplot(111).add_patch(rect)
-#         color_index += 1
-#
-#     plt.savefig(save_path % frame)
-#     plt.close()
-
-def save_rected_image(frame, positions):
-    path = save_path % frame
-    image = Image.open(path)
-    painter = ImageDraw.Draw(image)
-    width = 5
-    colors = ['red', 'green', 'blue', 'yellow']
-    color_index = 0
-    for position in positions:
-        painter.rectangle([(position[1] - width//2, position[0] - width//2), (position[1] + width//2, position[0] + width//2)], fill=colors[color_index % len(colors)], outline=colors[color_index % len(colors)])
-        color_index += 1
-    image.save(path)
-    del painter
 
 def create_gif(images, gif_name, duration=0.2):
     '''
@@ -282,26 +253,22 @@ def is_equal(a, b, error=0.0001):
 
 
 # Return a cropped array whose shape is 'shape' & given center. Support string of file name & array.
-def crop_image(image, center, shape=(224, 224), mode='gray'):
-    if type(image) == int:
-        image = image_path % image
-    if type(image) == str:
-        image = image_to_array(image)
+def crop_image(image_np, center, shape=(224, 224), mode='gray'):
     cropped_image = None
     if type(shape) == int:
         shape = (shape, shape)
-    assert image.shape[0] >= shape[0] and image.shape[1] >= shape[1], "Uncorrect crop shape"
+    assert image_np.shape[0] >= shape[0] and image_np.shape[1] >= shape[1], "Uncorrect crop shape"
     rectified_x = max(center[0], shape[0] // 2)
-    rectified_x = min(rectified_x, image.shape[0] - shape[0] // 2)
+    rectified_x = min(rectified_x, image_np.shape[0] - shape[0] // 2)
     rectified_y = max(center[1], shape[1] // 2)
-    rectified_y = min(rectified_y, image.shape[1] - shape[1] // 2)
+    rectified_y = min(rectified_y, image_np.shape[1] - shape[1] // 2)
     rectified_center = (rectified_x, rectified_y)
-    if len(image.shape) == 3:
-        cropped_image = image[rectified_center[0]-shape[0]//2 : rectified_center[0]+shape[0]//2, rectified_center[1]-shape[1]//2 : rectified_center[1]+shape[1]//2, :]
+    if len(image_np.shape) == 3:
+        cropped_image = image_np[rectified_center[0]-shape[0]//2 : rectified_center[0]+shape[0]//2, rectified_center[1]-shape[1]//2 : rectified_center[1]+shape[1]//2, :]
         if mode == 'gray':
             cropped_image = copy_2D_to_3D(cropped_image[..., 0], 3)
-    if len(image.shape) == 2:
-        cropped_image = image[rectified_center[0]-shape[0]//2 : rectified_center[0]+shape[0]//2, rectified_center[1]-shape[1]//2 : rectified_center[1]+shape[1]//2]
+    if len(image_np.shape) == 2:
+        cropped_image = image_np[rectified_center[0]-shape[0]//2 : rectified_center[0]+shape[0]//2, rectified_center[1]-shape[1]//2 : rectified_center[1]+shape[1]//2]
 
     return cropped_image
 
@@ -528,7 +495,7 @@ def get_freer_gpu():
 def log_metrics(train, y_true, y_pred, loss, model, save_path, note=None, save=True, show_detail=True):
     net_name = model.__class__.__name__
     if train:
-        print('training loss:', loss)
+        print(Fore.GREEN, 'training loss:', loss, Fore.BLACK)
         dic = {'loss': loss}
     else:
         classify_report    = metrics.classification_report(y_true, y_pred, digits=6)

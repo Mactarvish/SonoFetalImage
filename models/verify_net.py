@@ -17,10 +17,12 @@ class VerifyNet(torch.nn.Module):
         volume = 1
         for l in input_shape:
             volume *= l
-        self.linear = torch.nn.Linear(volume, num_classes, bias=False)
+        self.linear1 = torch.nn.Linear(volume, 1000, bias=False)
+        self.linear2 = torch.nn.Linear(1000, num_classes, bias=False)
 
     def forward(self, x):
         x = x.view(x.size(0), -1)
-        x = self.linear(x)
+        x = self.linear1(x)
+        x = self.linear2(x)
         x = F.relu(x)
         return x
