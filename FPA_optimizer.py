@@ -200,11 +200,25 @@ class FPA(object):
         for i in range(self.num_iteration):
             self.pollination()
             self.update_best_pollen()
+
         return self.best_pollen
 
     def init_pollens(self, existed_pollens=None):
+        # 我们固定default_pollen的每个值为其所属上下限的中心，例如condition是[[2, 0, 10], [3, -3, -1]]，则该花粉固定为[5, 5, -2, -2, -2]
+        # 初始化self.best_pollen
+        components = []
+        for c in self.conditions:
+            dim, lower, upper = c
+            # g是子自变量组，dim维
+            g = []
+            for i in range(dim):
+                g.append((lower + upper/10) / 2)
+            components.append(g)
+        benchmark_pollen = Pollen(components)
+        benchmark_fitness = self.calculate_fitness(benchmark_pollen)
+        self.best_pollen = (benchmark_fitness, benchmark_pollen)
+
         self.fitnesses = []
-        self.best_pollen = (np.inf, None)
         # 未指定用于初始化的花粉，从每个子组的上下限中采样花粉
         if existed_pollens is None:
             self.pollens = []
@@ -212,9 +226,10 @@ class FPA(object):
                 components = []
                 for c in self.conditions:
                     dim, lower, upper = c
-                    g = [(lower + upper) / 2] * dim
-                    for i in range(len(g)):
-                        g[i] += float(np.random.uniform(-(upper-lower)/2, (upper-lower)/2))
+                    # g是子自变量组，dim维
+                    g = []
+                    for i in range(dim):
+                        g.append(float(np.random.uniform(lower, upper)))
                     components.append(g)
                 self.pollens.append(Pollen(components))
         #指定了用于初始化的花粉，直接初始化
@@ -247,36 +262,20 @@ class FPA(object):
     def global_pollination(self, i):
         levy_vector = levy_flight(self.pollen_dim)
         delta = levy_vector * (self.best_pollen[1] - self.pollens[i])
-        new_pollen = self.pollens[i] + levy_vector * (self.best_pollen[1] - self.pollens[i])
+        new_pollen = self.pollens[i] + delta
         unrectified_pollen = new_pollen
         rectified_pollen, fitness = self.check_new_pollen(new_pollen, i)
         # 为了方便调试，返回当前解
         return rectified_pollen, fitness
 
     def local_pollination(self, i):
-        C_i = 0
-        E_i_j = []
-        for j in range(self.num_pollen):
-            if self.fitnesses[j] < self.fitnesses[i]:
-                E_i_j.append(1)
-            else:
-                E_i_j.append(0)
-        for k in range(self.num_pollen):
-            Q_k_num = E_i_j[k] / self.fitnesses[k]
-            Q_k_den = sum([a + 1/b for a, b in zip(E_i_j, self.fitnesses)])
-            Q_i_k = Q_k_num / Q_k_den
-            C_i += Q_i_k * (self.fitnesses[k] - self.fitnesses[i])
-        C_i = C_i
-
         indexes = sample(range(0, self.num_pollen), 2)
         pollen1 = self.pollens[indexes[0]]
         pollen2 = self.pollens[indexes[1]]
         mixed_pollen = pollen1 + pollen2
         e = list(np.random.rand(self.pollen_dim))
         tmp = mixed_pollen * e
-        global_item = list(levy_flight(self.pollen_dim) * C_i)
-        new_pollen = self.pollens[i] + tmp# + global_item
-        new_pollen += global_item
+        new_pollen = self.pollens[i] + tmp
         unrectified_pollen = new_pollen
         rectified_pollen, fitness = self.check_new_pollen(new_pollen, i)
         # 为了方便调试，返回当前解

@@ -29,6 +29,7 @@ import datasets.cifar10 as cifar10
 # from datasets.ThyDataset import ThyDataset
 
 NUM_CLASSES = 10
+BATCH_SIZE = 20
 DATASET_SIZE = 1/5
 AUGMENTATION_STRATEGY = None
 
@@ -39,9 +40,8 @@ if DEBUG_MODE:
 torch.manual_seed(55)
 torch.cuda.manual_seed(59)
 
-print(torch.cuda.is_available())
-train_loader = DataLoader(cifar10.Cifar10(train=True,  dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=7, num_workers=7)
-val_loader   = DataLoader(cifar10.Cifar10(train=False, dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=7, num_workers=7)
+train_loader = DataLoader(cifar10.Cifar10(train=True,  dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+val_loader   = DataLoader(cifar10.Cifar10(train=False, dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
 
 # train_loader = DataLoader(ThyDataset.ThyDataset(train=True, image_transform=ThyDataset.transformer, pre_transform=None),  shuffle=True, batch_size=5, num_workers=5)
 # val_loader   = DataLoader(ThyDataset.ThyDataset(train=False, image_transform=ThyDataset.transformer, pre_transform=None), shuffle=True, batch_size=5, num_workers=5)
@@ -118,27 +118,51 @@ def log(train, save, show_detail, calculate_metrics=True):
 
 def calculate_loss(model_output, target):
     '''
-    由于2018.5.6把任务统一作为了回归任务处理，所以target都是one-hot-like，用LogSoftmax计算loss
     :param model_output: 
     :param target: [0,2,5,2,1,3]的one-hot Variable/Tensor
     :return: 
     '''
     assert isinstance(target, Variable) or isinstance(target, torch.Tensor)
-    # target_np = None
-    # if isinstance(target, Variable):
-    #     target_np = target.cpu().data.numpy()
-    # if isinstance(target, torch.Tensor):
-    #     target_np = target.cpu().numpy()
-    # # if AUGMENTATION_STRATEGY == None:
-    # #     target_np = mu.to_categorical(target_np, num_classes=NUM_CLASSES)
-    # target = Variable(torch.from_numpy(target_np)).cuda()
+
+    def get_max_second_max(output):
+        '''
+        返回给定二维tensor的每一行的最大值索引和次大值索引
+        :param output_tensor: 
+        :return:
+        '''
+        output_tensor = None
+        if isinstance(output, Variable):
+            output_tensor = output.cpu().data
+        else:
+            output_tensor = output
+        assert len(output_tensor.size()) == 2, 'tensor must be 2d, but got %dd' % len(output_tensor.size())
+        output_np = output_tensor.clone().numpy()
+        m = output_np.argmax(axis=1)
+
+        for i in range(output_np.shape[0]):
+            output_np[i, m[i]] = -np.inf
+        sm = output_np.argmax(axis=1)
+
+        return m, sm
+
+    outstandings = []
+    m, sm = get_max_second_max(model_output)
+    for i in range(model_output.size()[0]):
+        outstanding = model_output[i, m[i]] - model_output[i, sm[i]]
+        outstanding = outstanding.view(1, 1)
+        outstandings.append(outstanding)
+    ol = 0
+    for o in outstandings:
+        ol += o
+    ol = 1/ol
 
     m = nn.LogSoftmax()
     t = -m(model_output)
     if not isinstance(target, Variable):
         target = Variable(target).cuda()
     loss = t * target
-    loss = torch.sum(loss) / 128
+    loss = torch.sum(loss) / BATCH_SIZE
+    loss = loss + ol.view(1)
 
     return loss
 
@@ -443,7 +467,7 @@ class GILR():
             loss_float = loss.cpu().data.numpy()
             return loss_float
 
-        fpa = FPA(fitness_function=test_fun, num_iteration=1, num_pollen=2, p_lp=0.8, conditions=[(self.num_groups, 0.00001, 0.2)])
+        fpa = FPA(fitness_function=test_fun, num_iteration=1, num_pollen=2, p_lp=0.8, conditions=[(self.num_groups, 0, 0.1)])
         fitness, pollen = fpa.run(epoch)
         loss = fitness
         hyperparam_groups = pollen.components
