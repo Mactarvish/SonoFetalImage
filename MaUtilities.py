@@ -28,6 +28,9 @@ def get_num_lines(file_name):
         context = f.readlines()
         return len(context)
 
+def cat_filepath(path, filename):
+    return compose_filepath(path, filename)
+
 def compose_filepath(path, filename):
     '''
     path最后可以有任意多个'/'，处理成只有1个之后与filename拼接。
@@ -202,21 +205,23 @@ def make_grid(*images_np, nrow=8, padding=2):
     return np.uint8(torchvision.utils.make_grid(image_block, nrow=nrow, padding=padding).numpy()).transpose(1, 2, 0)
 
 # Resize an array to 'new_shape' using bilinear interpolation.
-def resize_image(feature_array, new_shape=(224, 224)):
+def resize_image(image, new_shape):
     '''
-    :param feature_array: 
+    :param image: PIL.Image or nparray
     :param new_shape: 
-    :return: wh(2d) whc(3d) nwhc(4d)
+    :return: wh(2d) whc(3d) nwhc(4d) nparray
     '''
+    if isinstance(image, Image.Image):
+        image = np.asarray(image)
     shape_PIL = (new_shape[1], new_shape[0])
-    if len(feature_array.shape) == 2:
-        return np.asarray(Image.fromarray(feature_array).resize(shape_PIL, Image.BILINEAR))
-    if len(feature_array.shape) == 3:
-        return np.asarray([np.asarray(Image.fromarray(feature_array[:, :, i]).resize(shape_PIL, Image.BILINEAR))
-                        for i in range(feature_array.shape[-1])]).transpose(1, 2, 0)
-    if len(feature_array.shape) == 4:
-        return np.asarray([np.asarray(Image.fromarray(feature_array[0, :, :, i]).resize(shape_PIL, Image.BILINEAR))
-                        for i in range(feature_array.shape[-1])]).transpose(1, 2, 0)
+    if len(image.shape) == 2:
+        return np.asarray(Image.fromarray(image).resize(shape_PIL, Image.BILINEAR))
+    if len(image.shape) == 3:
+        return np.asarray([np.asarray(Image.fromarray(image[:, :, i]).resize(shape_PIL, Image.BILINEAR))
+                        for i in range(image.shape[-1])]).transpose(1, 2, 0)
+    if len(image.shape) == 4:
+        return np.asarray([np.asarray(Image.fromarray(image[0, :, :, i]).resize(shape_PIL, Image.BILINEAR))
+                        for i in range(image.shape[-1])]).transpose(1, 2, 0)
 
     #return np.expand_dims(image, axis = 0)
 
@@ -250,7 +255,6 @@ def is_equal(a, b, error=0.0001):
         b = b.cpu().data.numpy()
     assert a.shape == b.shape, "Two arrays must be the same shape."
     return np.sum(abs(a - b)) < error
-
 
 # Return a cropped array whose shape is 'shape' & given center. Support string of file name & array.
 def crop_image(image_np, center, shape=(224, 224), mode='gray'):
@@ -548,6 +552,36 @@ def log_metrics(train, y_true, y_pred, loss, model, save_path, note=None, save=T
                     else:
                         torch.save(model, '%s/%s_%s.pkl' % (save_path, note, net_name))
 
+def get_mean_std(dataset, new_shape=None):
+    '''
+    计算图像数据集的各个通道的均值和方差。
+    数据集应具有这样的结构：
+    dataset[i][0]是图像（可转换为nparray），dataset[i][1]是标签（int）
+    每张图像必须具有相同大小而且，如果3通道，需要是whc
+    :param dataset: 
+    :return: 
+    '''
+    import torch.utils.data as data
+    assert isinstance(dataset, data.Dataset)
+    images = []
+    for i in range(len(dataset)):
+        image = None
+        if new_shape is not None:
+            image = resize_image(dataset[i][0], new_shape=new_shape)
+            image = image / 255
+        else:
+            image = np.asarray(dataset[i][0]) / 255
+        images.append(image)
+    catblock = np.row_stack(images)
+    mean = None
+    std = None
+    if len(catblock.shape) == 3:
+        mean = np.mean(catblock, axis=(0, 1))
+        std = np.std(catblock, axis=(0, 1))
+    else:
+        mean = np.mean(catblock)
+        std = np.std(catblock)
+    return mean, std
 
 ################################################################ pytorch transformer ################################################################
 class ResizeImage(object):
