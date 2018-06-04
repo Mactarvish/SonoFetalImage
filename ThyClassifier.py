@@ -500,40 +500,7 @@ def test(model, criterion, epoch):
         loss_cpu = loss.cpu().data.numpy()[0]
         yield prediction, label.data, loss_cpu
 
-# vgg=models.vgg16(pretrained=True)
-# vgg.classifier = nn.Sequential(
-#             nn.Linear(512 * 7 * 7, 4096),
-#             nn.ReLU(True),
-#             nn.Dropout(),
-#             nn.Linear(4096, 4096),
-#             nn.ReLU(True),
-#             nn.Dropout(),
-#             nn.Linear(4096, NUM_CLASSES),
-#         )
-# group0 = [resnet_th(pretrained=True), mydensenet121(pretrained=False)]
-# group1 = [models.resnet18(pretrained=True), models.densenet121(pretrained=True), vgg]
 
-current_save_folder = 'metrics_code_transformation_2'
-if not os.path.exists(current_save_folder):
-    os.makedirs(current_save_folder)
-
-if len(os.listdir(current_save_folder)) == 0:
-    print('Metrics folder is empty. Training model.')
-else:
-    if input('Clear metrics folder?') == 'y':
-        def clear_folder(path):
-            ls = os.listdir(path)
-            for i in ls:
-                c_path = os.path.join(path, i)
-                if os.path.isdir(c_path):
-                    clear_folder(c_path)
-                else:
-                    os.remove(c_path)
-        clear_folder(current_save_folder)
-        print('Clear.')
-    else:
-        print('Files kept. Continue?')
-        assert input() == 'y', 'User terminated process.'
 
 GI = True
 NOTE = None
@@ -553,6 +520,36 @@ for model in [resnet18]:
     print('Using gpu %d.' % freer_gpu)
     print(torch.cuda.is_available())
     torch.cuda.set_device(freer_gpu)
+
+    metrics_folder_name = input('metrics folder: ')
+    if metrics_folder_name == 'l' or metrics_folder_name == 'L':
+        metrics_folder_name = torch.load('last_metrics_folder_name')
+        print('metrics saved to %s' % metrics_folder_name)
+    else:
+        torch.save(metrics_folder_name, 'last_metrics_folder_name')
+    current_save_folder = 'metrics/%s/gpu%d' % (metrics_folder_name, freer_gpu)
+    if not os.path.exists(current_save_folder):
+        os.makedirs(current_save_folder)
+    if len(os.listdir(current_save_folder)) == 0:
+        print('Metrics folder is empty. Training model.')
+    else:
+        if input('Clear metrics folder?') == 'y':
+            def clear_folder(path):
+                ls = os.listdir(path)
+                for i in ls:
+                    c_path = os.path.join(path, i)
+                    if os.path.isdir(c_path):
+                        clear_folder(c_path)
+                    else:
+                        os.remove(c_path)
+
+
+            clear_folder(current_save_folder)
+            print('Clear.')
+        else:
+            print('Files kept. Continue?')
+            assert input() == 'y', 'User terminated process.'
+
     epochs = 100
     criterion = nn.CrossEntropyLoss()
     model = model.cuda()
