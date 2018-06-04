@@ -455,9 +455,18 @@ class GILR():
 
         return hyperparam_groups
 
-@log(train=True, save=True, show_detail=True, calculate_metrics=True)
+calculate_metrics = True
+show_detail = False
+save = True
+lrs = []
+
+# @log(train=True, save=True, show_detail=True, calculate_metrics=True)
 def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
     model.train(True)
+    log_loss = None
+    log_y_predictions = []
+    log_y_trues = []
+    epoch_loss = 0
     if not GI:
         scheduler.step()
     for (inputs, labels) in train_loader:
@@ -469,7 +478,6 @@ def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
         inputs, labels = Tensor2Variable(inputs, labels, loss_type='LSM')
         # run the model
         output = model(inputs)
-
         loss = calculate_loss(output, labels)
         prediction = output.data # LongTensor
         loss.backward()
@@ -480,25 +488,58 @@ def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
             optimizer.step(FPA_mode=True)
         else:
             optimizer.step()
+        lr = []
+        for group in optimizer.param_groups:
+            lr.append(group['lr'])
+        lrs.append(lr)
 
         prediction_cpu = prediction.cpu()
         label_cpu = labels.cpu().data
         loss_cpu = loss.cpu().data.numpy()[0]
-        # print('\nmini-batch done\n')
-        yield prediction_cpu, label_cpu, loss_cpu
 
-@log(train=False, save=True, show_detail=True)
+        for e in prediction_cpu:
+            log_y_predictions.append(e)
+        for e in label_cpu:  # label: LongTensor
+            log_y_trues.append(e)
+        epoch_loss += loss_cpu
+        # torch.save(lrs, mu.cat_filepath(current_save_folder, 'lrs'))
+    log_loss = epoch_loss
+    if calculate_metrics:
+        mu.log_metrics(True, log_y_trues, log_y_predictions, log_loss, model=model, save=save,
+                       show_detail=show_detail, save_path=current_save_folder, note=NOTE)
+
+        # yield prediction_cpu, label_cpu, loss_cpu
+
+# @log(train=False, save=True, show_detail=True)
 def test(model, criterion, epoch):
     model.train(False)
-    for (input, label) in test_loader:
-        input, label = Tensor2Variable(input, label, loss_type='CEL')
-        output = model(input)
+    log_loss = None
+    log_y_predictions = []
+    log_y_trues = []
+    epoch_loss = 0
+    for (inputs, labels) in test_loader:
+        inputs, labels = Tensor2Variable(inputs, labels, loss_type='CEL')
+        output = model(inputs)
         _, prediction = torch.max(output.data, 1)
-        loss = criterion(output, label)
-        regression_loss = calculate_loss(output, nums2onehots(label.cpu().data))
+        loss = criterion(output, labels)
+        regression_loss = calculate_loss(output, nums2onehots(labels.cpu().data))
         loss = regression_loss
         loss_cpu = loss.cpu().data.numpy()[0]
-        yield prediction, label.data, loss_cpu
+
+        for yp in prediction:
+            log_y_predictions.append(yp)
+        for yt in labels.data:  # label: LongTensor
+            # m, prediction = torch.max(e, 0)
+            # assert m[0] == 1, "test label must be one-hot"
+            # prediction = int(prediction[0])
+            log_y_trues.append(yt)
+        epoch_loss += loss_cpu
+    log_loss = epoch_loss
+    if calculate_metrics:
+        mu.log_metrics(False, log_y_trues, log_y_predictions, log_loss, model=model, save=save,
+                       show_detail=show_detail, save_path=current_save_folder, note=NOTE)
+
+        # yield prediction, label.data, loss_cpu
 
 
 
