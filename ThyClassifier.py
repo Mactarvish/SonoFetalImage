@@ -20,7 +20,6 @@ from torchvision import datasets, models, transforms, utils
 import datetime
 import copy
 from colorama import Fore
-# from FPA_optimization.cifar10_beyond_stanstard.backupinU.FPA_optimizer import FPA
 from FPA_optimizer import FPA
 
 from models.resnet_th import resnet_th
@@ -43,10 +42,10 @@ torch.manual_seed(60)
 torch.cuda.manual_seed(63)
 
 print(torch.cuda.is_available())
-train_loader        = DataLoader(cifar10.Cifar10(mode='train',  dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
-test_loader         = DataLoader(cifar10.Cifar10(mode='test', dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
-validation_loader   = DataLoader(cifar10.Cifar10(mode='validation', dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
-NUM_CLASSES = 10
+train_loader        = DataLoader(cifar100.Cifar100(mode='train',  dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar100.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+test_loader         = DataLoader(cifar100.Cifar100(mode='test', dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar100.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+validation_loader   = DataLoader(cifar100.Cifar100(mode='validation', dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar100.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+NUM_CLASSES = 100
 
 # train_loader = DataLoader(ThyDataset.ThyDataset(train=True, image_transform=ThyDataset.transformer, pre_transform=None),  shuffle=True, batch_size=5, num_workers=5)
 # val_loader   = DataLoader(ThyDataset.ThyDataset(train=False, image_transform=ThyDataset.transformer, pre_transform=None), shuffle=True, batch_size=5, num_workers=5)
@@ -324,7 +323,8 @@ class MaSGD(optim.SGD):
                     else:
                         param_state['momentum_buffer'] = last_momentum
                 d_p = next(d_p_g)
-                p.data.add_(group['lr'], d_p)
+                # 引入误差
+                # p.data.add_(group['lr'], d_p)
                 self.last_dps = []
                 self.last_momentums = []
 
@@ -343,6 +343,7 @@ class MaSGD(optim.SGD):
             loss = closure()
 
         for group in self.param_groups:
+            current_lr = group['lr']
             weight_decay = group['weight_decay']
             momentum = group['momentum']
             dampening = group['dampening']
@@ -360,7 +361,7 @@ class MaSGD(optim.SGD):
                         self.last_momentums.append(None)
                         buf = param_state['momentum_buffer'] = d_p.clone()
                     else:
-                        self.last_momentums.append(param_state['momentum_buffer'])
+                        self.last_momentums.append(param_state['momentum_buffer']) #.clone()
                         buf = param_state['momentum_buffer']
                         buf.mul_(momentum).add_(1 - dampening, d_p)
                     if nesterov:
@@ -368,7 +369,8 @@ class MaSGD(optim.SGD):
                     else:
                         d_p = buf
                 self.last_dps.append(d_p)
-                p.data.add_(-group['lr'], d_p)
+                p.data.add_(-current_lr, d_p)
+
         if not FPA_mode:
             # 非FPA调优状态，那么本次step后就是下一个mini-batch的初始值
             self.last_dps = []
@@ -394,6 +396,7 @@ class GILR():
             raise NotImplementedError
         elif isinstance(update_hyparams_names, list):
             self.update_hyparams_names = update_hyparams_names
+            # security check
             for group in optimizer.param_groups:
                 for p in self.update_hyparams_names:
                     assert p in group
@@ -432,23 +435,23 @@ class GILR():
                 for key in update_hyperparams.keys():
                     param_group[key] = update_hyperparams[key][i]
 
-            # b = copy.deepcopy(self.optimizer.param_groups)
-            # c = copy.deepcopy(self.optimizer.state)
+            bu = copy.deepcopy(model.state_dict())
             # 用当前学习率更新一波参数
             self.optimizer.step(FPA_mode=True)
             output = self.model(self.inputs)
             # 试验完毕，回退原先状态
+            # 回退模型的超参数
             self.optimizer.step_back()
-            # bb = copy.deepcopy(self.optimizer.param_groups)
-            # cv = copy.deepcopy(self.optimizer.state)
-            # del b,c,bb,cv
+
+            # 回退模型的参数
+            model.load_state_dict(bu)
 
             loss = calculate_loss(output, self.labels)
             loss_float = loss.cpu().data.numpy()
             return loss_float
 
-        fpa = FPA(fitness_function=test_fun, num_iteration=1, num_pollen=2, p_lp=0.8, conditions=[(self.num_groups, 0.00001, 0.2),
-                                                                                                  (self.num_groups, 0.5, 0.9)])
+        fpa = FPA(fitness_function=test_fun, num_iteration=1, num_pollen=2, p_lp=0.8, conditions=[(self.num_groups, 0.00001, 0.2)]) # momentum: (self.num_groups, 0.5, 0.9)
+
         fitness, pollen = fpa.run()
         loss = fitness
         hyperparam_groups = pollen.components
@@ -458,9 +461,8 @@ class GILR():
 calculate_metrics = True
 show_detail = False
 save = True
-lrs = []
+lrs_log = []
 
-# @log(train=True, save=True, show_detail=True, calculate_metrics=True)
 def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
     model.train(True)
     log_loss = None
@@ -491,7 +493,7 @@ def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
         lr = []
         for group in optimizer.param_groups:
             lr.append(group['lr'])
-        lrs.append(lr)
+        lrs_log.append(lr)
 
         prediction_cpu = prediction.cpu()
         label_cpu = labels.cpu().data
@@ -502,15 +504,12 @@ def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
         for e in label_cpu:  # label: LongTensor
             log_y_trues.append(e)
         epoch_loss += loss_cpu
-        # torch.save(lrs, mu.cat_filepath(current_save_folder, 'lrs'))
+    torch.save(lrs_log, mu.cat_filepath(current_save_folder, 'lrs'))
     log_loss = epoch_loss
     if calculate_metrics:
         mu.log_metrics(True, log_y_trues, log_y_predictions, log_loss, model=model, save=save,
                        show_detail=show_detail, save_path=current_save_folder, note=NOTE)
 
-        # yield prediction_cpu, label_cpu, loss_cpu
-
-# @log(train=False, save=True, show_detail=True)
 def test(model, criterion, epoch):
     model.train(False)
     log_loss = None
@@ -528,20 +527,13 @@ def test(model, criterion, epoch):
 
         for yp in prediction:
             log_y_predictions.append(yp)
-        for yt in labels.data:  # label: LongTensor
-            # m, prediction = torch.max(e, 0)
-            # assert m[0] == 1, "test label must be one-hot"
-            # prediction = int(prediction[0])
+        for yt in labels.data:
             log_y_trues.append(yt)
         epoch_loss += loss_cpu
     log_loss = epoch_loss
     if calculate_metrics:
         mu.log_metrics(False, log_y_trues, log_y_predictions, log_loss, model=model, save=save,
                        show_detail=show_detail, save_path=current_save_folder, note=NOTE)
-
-        # yield prediction, label.data, loss_cpu
-
-
 
 GI = True
 NOTE = None
@@ -583,8 +575,6 @@ for model in [resnet18]:
                         clear_folder(c_path)
                     else:
                         os.remove(c_path)
-
-
             clear_folder(current_save_folder)
             print('Clear.')
         else:
@@ -617,15 +607,15 @@ for model in [resnet18]:
     optimizer = None
     scheduler = None
     if GI:
-        optimizer = MaSGD(divide_model_params(model), lr=0.005, momentum=0.8, weight_decay=0.0003)
-        scheduler = GILR(optimizer, model=model, update_hyparams_names=['lr', 'momentum'], update_weight_decays=False, update_momentums=False, last_epoch=-1)
+        optimizer = MaSGD(model.parameters(), lr=0.005, momentum=0.8)
+        scheduler = GILR(optimizer, model=model, update_hyparams_names=['lr'], update_weight_decays=False, update_momentums=False, last_epoch=-1)
     else:
-        optimizer = optim.SGD(divide_model_params(model), lr=0.005, momentum=0.8)
+        optimizer = optim.SGD(model.parameters(), lr=0.005, momentum=0.8)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
     for epoch in range(epochs):
         print('{} Epoch {}/{}'.format(model.__class__.__name__, epoch, epochs))
-        print('-' * 10)
+        print('-' * 10, ' ', datetime.datetime.strftime(datetime.datetime.now(), '%H:%M:%S'))
         since = time.time()
 
         train(model, criterion, optimizer, scheduler, epoch=epoch, augmentation_strategy=AUGMENTATION_STRATEGY)

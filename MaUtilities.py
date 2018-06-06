@@ -18,6 +18,7 @@ import datetime
 from torch.autograd import Variable
 from colorama import Fore
 from torchvision import transforms
+import os
 
 image_path = './IU22Frame/%d.png'
 save_path = "./IU22Result/%d.png"
@@ -452,6 +453,132 @@ def VisdomDrawLines(*lines, legends=None, title=None):
         X=np.linspace(0, Y.shape[0]-1, Y.shape[0]),
         opts=opts,
     )
+
+def VisdomDrawScatters(points_list, legends=None, title=None):
+    # 画散点图
+    # legends必须显式给定，即这样调用：mu.VisdomDrawLines(train_acc, test_acc, legends=['train', 'test'])
+    '''
+    :param points_list: 点列表,例如[3,5,3,4,3,5,7,7,4,3,2,4,6,8,6,3,2,3,6,7,8,5]
+    :param legends: 
+    :param title: 
+    :return: 
+    '''
+    assert isinstance(points_list, list) and (isinstance(points_list[0], int) or isinstance(points_list[0], float))
+    index = np.arange(len(points_list)).reshape(-1, 1)
+    X = np.column_stack((index, points_list))
+    if title == None:
+        title = datetime.datetime.strftime(datetime.datetime.now(), '%H:%M:%S')
+    if legends == None:
+        opts = dict(title=title, markersize=3)
+    else:
+        if isinstance(legends, str):
+            # 目前一次只能画一组散点,所以现在图例也没什么卵用
+            legends = [legends]
+        opts = dict(legend=legends, title=title, markersize=3)
+    from visdom import Visdom
+    viz = Visdom()
+    viz.scatter(
+        X=X,
+        opts=opts
+    )
+
+def VisdomDrawContrastLineChart(*metrics_path, legends=None):
+    '''
+    0: acc
+    1: loss test
+    2: loss train
+    :param metrics_path: 一些包含metrics文件的文件夹的路径
+    :param legends: 每一组metrics的图例，个数必须与metrics_path的个数一致
+    :return: 
+    '''
+
+    def GetCertainMetrics(metrics_path, metrics_str, train_saved=False):
+        '''
+        :param metrics_path: 指标文件的路径
+        :return: 获取每个epoch的精度，list类型返回
+        '''
+        assert type(metrics_str) == str
+        metrics = torch.load(metrics_path)
+        certain_metrics = []
+        for i in metrics:
+            certain_metrics.append(i[metrics_str])
+
+        return certain_metrics
+
+    def get_acc_ltrain_ltest(metrics_path):
+        '''
+        acc on test, loss on test, loss on train
+        :param metrics_path: 
+        :return: 
+        '''
+        test_metrics = None
+        train_metrics = None
+        filenames = os.listdir(metrics_path)
+        # 容错：如果这个path是父一级的文件夹，即包括gpu1和gpu2的文件夹，那么判断是否只有一个带‘gpu’的文件夹，如果是的话，
+        # 发出警告并更新path为这个gpu文件夹，如果有两个，那么抛出异常。
+        num_gpu_folders = 0
+        gpu_folder = None
+        for fn in filenames:
+            if 'gpu' in fn:
+                gpu_folder = fn
+                num_gpu_folders += 1
+        assert num_gpu_folders <= 1, 'Fault tolerant: Only tolerate one gpu folder.'
+        if num_gpu_folders == 1:
+            print(Fore.RED,
+                  "Warning: 'metrics_path' catains a '%s' folder. Set '%s' to 'metrics_path'. Check the path for detail." % (
+                  gpu_folder, gpu_folder), Fore.BLACK)
+            metrics_path = cat_filepath(metrics_path, gpu_folder)
+            filenames = os.listdir(metrics_path)
+
+        for fn in filenames:
+            if 'test' in fn:
+                test_metrics = fn
+            if 'train' in fn:
+                train_metrics = fn
+
+        acc = GetCertainMetrics(compose_filepath(metrics_path, test_metrics), metrics_str='overall_accuracy')
+        loss_test = GetCertainMetrics(compose_filepath(metrics_path, test_metrics), metrics_str='loss')
+        loss_train = GetCertainMetrics(compose_filepath(metrics_path, train_metrics), metrics_str='loss')
+        return [acc, loss_train, loss_test]
+
+    if legends is not None:
+        assert len(legends) == len(metrics_path), 'unequal numbers of legends: %d and metrics_path: %d' % (len(legends), len(metrics_path))
+
+    metrics = [get_acc_ltrain_ltest(p) for p in metrics_path]
+    for m in metrics:
+        l = len(m[0])
+        for s in m:
+            assert len(s) == l
+    length = min([len(m[0]) for m in metrics])
+    if length != max([len(m[0]) for m in metrics]):
+        print(Fore.RED, 'Inconsistent length', Fore.BLACK)
+
+    acces = []
+    losses = []
+    for m in metrics:
+        acc = m[0][:length]
+        loss_train = m[1][:length]
+        loss_test = m[2][:length]
+        acces.append(acc)
+        losses.append(loss_train)
+        losses.append(loss_test)
+    acc_legends = []
+    loss_legends = []
+    if legends is None:
+        for i in range(len(acces)):
+            acc_legends.append('acc_%d' % (i+1))
+        for i in range(len(losses) // 2):
+            loss_legends.append('loss_train_%d' % (i+1))
+            loss_legends.append('loss_test_%d' % (i+1))
+    else:
+        for i in range(len(acces)):
+            acc_legends.append('acc_%s' % legends[i])
+        for i in range(len(losses) // 2):
+            loss_legends.append('loss_train_%s' % legends[i])
+            loss_legends.append('loss_test_%s' % legends[i])
+
+    VisdomDrawLines(*acces, legends=acc_legends)
+    VisdomDrawLines(*losses, legends=loss_legends)
 
 def to_categorical(y, num_classes=None):
     """Converts a class vector (integers) to binary class matrix.

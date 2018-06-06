@@ -236,7 +236,7 @@ class FPA(object):
         indexes = sample(range(0, self.num_pollen), 2)
         pollen1 = self.pollens[indexes[0]]
         pollen2 = self.pollens[indexes[1]]
-        mixed_pollen = pollen1 + pollen2
+        mixed_pollen = pollen1 - pollen2
         e = list(np.random.rand(self.pollen_dim))
         tmp = mixed_pollen * e
         new_pollen = self.pollens[i] + tmp
