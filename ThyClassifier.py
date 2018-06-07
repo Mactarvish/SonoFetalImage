@@ -29,7 +29,9 @@ from models.preact_resnet import PreActResNet18
 import datasets.ThyDataset as ThyDataset
 import datasets.cifar10 as cifar10
 import datasets.cifar100 as cifar100
-# from datasets.ThyDataset import ThyDataset
+import datasets.STL10 as STL10
+import datasets.Caltech101 as Caltech101
+from datasets.ThyDataset import ThyDataset
 
 DATASET_SIZE = 1/5
 AUGMENTATION_STRATEGY = None
@@ -42,22 +44,21 @@ torch.manual_seed(60)
 torch.cuda.manual_seed(63)
 
 print(torch.cuda.is_available())
-train_loader        = DataLoader(cifar100.Cifar100(mode='train',  dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar100.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
-test_loader         = DataLoader(cifar100.Cifar100(mode='test', dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar100.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
-validation_loader   = DataLoader(cifar100.Cifar100(mode='validation', dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar100.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
-NUM_CLASSES = 100
+
+# train_loader = DataLoader(Caltech101.Caltech101(train=True, image_transform=Caltech101.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+# test_loader = DataLoader(Caltech101.Caltech101(train=False, image_transform=Caltech101.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+
+# train_loader = DataLoader(STL10.MySTL10(train=True, image_transform=STL10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+# test_loader = DataLoader(STL10.MySTL10(train=False, image_transform=STL10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+
+train_loader        = DataLoader(cifar10.Cifar10(mode='train',  dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+test_loader         = DataLoader(cifar10.Cifar10(mode='test', dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+validation_loader   = DataLoader(cifar10.Cifar10(mode='validation', dataset_size=DATASET_SIZE, binclassify=None, image_transform=cifar10.transformer), shuffle=False, batch_size=BATCH_SIZE, num_workers=BATCH_SIZE)
+NUM_CLASSES = 10
 
 # train_loader = DataLoader(ThyDataset.ThyDataset(train=True, image_transform=ThyDataset.transformer, pre_transform=None),  shuffle=True, batch_size=5, num_workers=5)
 # val_loader   = DataLoader(ThyDataset.ThyDataset(train=False, image_transform=ThyDataset.transformer, pre_transform=None), shuffle=True, batch_size=5, num_workers=5)
 
-# model = resnet_th(pretrained=True)
-# model = VerifyNet(input_shape=(255, 255, 3), num_classes=6)
-# model = models.resnet18(pretrained=True)
-# model = models.vgg16(pretrained=True)
-# model = models.inception_v3(pretrained=False, num_classes=6)
-# model = PreActResNet18(num_classes=6)
-# model = mydensenet121(pretrained=True)
-# model = models.densenet121(pretrained=True)
 
 def Tensor2Variable(input, label, loss_type):
     """
@@ -291,9 +292,6 @@ def augument_data(inputs, labels_oh, strategy, num_augumented=5):
     return all_inputs, all_labels
 
 class MaSGD(optim.SGD):
-    '''
-    ！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！如果启用GI weight_decay，这里的weight_decay可能就没什么卵用了
-    '''
     def __init__(self, params, lr, momentum=0, dampening=0,
                  weight_decay=0, nesterov=False):
         super(MaSGD, self).__init__(params, lr=lr, momentum=momentum, dampening=dampening,
@@ -321,6 +319,7 @@ class MaSGD(optim.SGD):
                     if last_momentum == None:
                         param_state.pop('momentum_buffer')
                     else:
+                        assert 0
                         param_state['momentum_buffer'] = last_momentum
                 d_p = next(d_p_g)
                 # 引入误差
@@ -361,7 +360,7 @@ class MaSGD(optim.SGD):
                         self.last_momentums.append(None)
                         buf = param_state['momentum_buffer'] = d_p.clone()
                     else:
-                        self.last_momentums.append(param_state['momentum_buffer']) #.clone()
+                        self.last_momentums.append(param_state['momentum_buffer']) # .clone()
                         buf = param_state['momentum_buffer']
                         buf.mul_(momentum).add_(1 - dampening, d_p)
                     if nesterov:
@@ -442,7 +441,6 @@ class GILR():
             # 试验完毕，回退原先状态
             # 回退模型的超参数
             self.optimizer.step_back()
-
             # 回退模型的参数
             model.load_state_dict(bu)
 
@@ -504,7 +502,7 @@ def train(model, criterion, optimizer, scheduler, epoch, augmentation_strategy):
         for e in label_cpu:  # label: LongTensor
             log_y_trues.append(e)
         epoch_loss += loss_cpu
-    torch.save(lrs_log, mu.cat_filepath(current_save_folder, 'lrs'))
+    # torch.save(lrs_log, mu.cat_filepath(current_save_folder, 'lrs'))
     log_loss = epoch_loss
     if calculate_metrics:
         mu.log_metrics(True, log_y_trues, log_y_predictions, log_loss, model=model, save=save,

@@ -18,6 +18,7 @@ import datetime
 from torch.autograd import Variable
 from colorama import Fore
 from torchvision import transforms
+import shutil
 import os
 
 image_path = './IU22Frame/%d.png'
@@ -29,28 +30,42 @@ def get_num_lines(file_name):
         context = f.readlines()
         return len(context)
 
-def cat_filepath(path, filename):
-    return compose_filepath(path, filename)
+def cat_filepath(*ab_path_components):
+    return compose_filepath(*ab_path_components)
 
-def compose_filepath(path, filename):
+def compose_filepath(*ab_path_components):
     '''
     path最后可以有任意多个'/'，处理成只有1个之后与filename拼接。
     :param path: 
     :param filename: 
     :return: 
     '''
-    if path.endswith('/'):
-        index = len(path) - 1
-        while path[index] == '/':
-            index -= 1
-            if index == -1:
-                break
-        index += 1
-        # print(index)
-        path = path[0: index + 1]
-    else:
-        path = path + '/'
-    full_path = path + filename
+    def word_keep_slash_behind(word):
+        if word.endswith('/'):
+            index = len(word) - 1
+            while word[index] == '/':
+                index -= 1
+                if index == -1:
+                    break
+            index += 1
+            # print(index)
+            word = word[0: index + 1]
+        else:
+            word = word + '/'
+        return word
+
+    folders = []
+    filename = None
+    for i in range(len(ab_path_components)):
+        if i != len(ab_path_components) - 1:
+            folders.append(word_keep_slash_behind(ab_path_components[i]))
+        else:
+            filename = ab_path_components[i]
+    # path = word_keep_slash_behind(path)
+    full_path = ''
+    for folder in folders:
+        full_path += folder
+    full_path += filename
     # print(full_path)
 
     return full_path
@@ -66,6 +81,24 @@ def RenameFile(original_dir, original_filename, new_filename):
     shutil.copyfile(original_dir + '/' + original_filename, original_dir + '/' + new_filename)
     os.remove(original_dir + '/' + original_filename)
     print("rename file %s to %s in %s" % (str(original_filename), str(new_filename), str(original_dir)))
+
+def AppendFoldernamesToimageNamesInfront(root_dir):
+    '''
+    :param root_dir: 不同类别的文件夹所在的根目录
+    :return: 
+    '''
+    dirs = os.listdir(root_dir)
+    if '.git' in dirs:
+        dirs.remove('.git')
+    dirs = [cat_filepath(root_dir, d) for d in dirs]
+    for dir in dirs:
+        category = dir.split('/')[-1]
+        images = os.listdir(dir)
+        count = 0
+        for image in images:
+            RenameFile(dir, image, category + '_' + image)
+            count += 1
+            print(count, '/', len(images), category + '_' + image)
 
 def get_line(file_name, line_index):
     '''
@@ -679,7 +712,7 @@ def log_metrics(train, y_true, y_pred, loss, model, save_path, note=None, save=T
                     else:
                         torch.save(model, '%s/%s_%s.pkl' % (save_path, note, net_name))
 
-def get_mean_std(dataset, new_shape=None):
+def get_dataset_mean_std(dataset, new_shape=None):
     '''
     计算图像数据集的各个通道的均值和方差。
     数据集应具有这样的结构：
@@ -689,7 +722,7 @@ def get_mean_std(dataset, new_shape=None):
     :return: 
     '''
     import torch.utils.data as data
-    assert isinstance(dataset, data.Dataset)
+    # assert isinstance(dataset, data.Dataset)
     images = []
     for i in range(len(dataset)):
         image = None
@@ -698,6 +731,8 @@ def get_mean_std(dataset, new_shape=None):
             image = image / 255
         else:
             image = np.asarray(dataset[i][0]) / 255
+        if len(image.shape) != 3:
+            image = copy_2D_to_3D(image, num_layers=3)
         images.append(image)
     catblock = np.row_stack(images)
     mean = None

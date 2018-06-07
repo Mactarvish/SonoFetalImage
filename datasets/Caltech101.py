@@ -1,3 +1,8 @@
+from torchvision.datasets.stl10 import STL10
+import MaUtilities as mu
+from torchvision import transforms
+
+
 import MaUtilities as mu
 from PIL import Image
 from torch.utils.data import Dataset
@@ -6,18 +11,17 @@ from torchvision import transforms
 import sqlite3
 
 use_gpu = torch.cuda.is_available()
-image_location = "/home/hdl2/Desktop/MedicalImage/"
-label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "postoperative1": 3, "subacute_thyroiditis1": 4, "subhyperthyreosis1": 5}
-# 去掉术后和亚甲亢
-#label_map = {"hashimoto_thyroiditis1": 0, "hyperthyreosis1": 1, "normal1": 2, "subacute_thyroiditis1": 3}
+image_location = "/home/hdl2/Desktop/101_ObjectCategories/"
+label_map = {}
+for i in range(101):
+    label_map[str(i)] = i
 
-connection = sqlite3.connect("ThyDataset")
-# connection = sqlite3.connect("ThyDataset_Small")
+connection = sqlite3.connect("Caltech101")
 cu = connection.cursor()
 
-class ThyDataset(Dataset):
+class Caltech101(Dataset):
     def __init__(self, train=True, image_transform=None, pre_transform=None):
-        super(ThyDataset, self).__init__()
+        super(Caltech101, self).__init__()
         self.train = train
         self.image_transform = image_transform
         self.pre_transform = pre_transform
@@ -69,9 +73,8 @@ class ThyDataset(Dataset):
         # record = cu.fetchall()[0]
         image_name = record[1]
         category = record[2]
-        #print(image_name, category)
-        assert 0, 'Change to catenation'
-        image = Image.open(image_location + category + '/' + image_name)#.convert('L')
+        image_path = mu.cat_filepath(image_location, category, image_name)
+        image = Image.open(image_path)#.convert('L')
         label = label_map[category]
 
         if self.image_transform is not None:
@@ -85,11 +88,44 @@ class ThyDataset(Dataset):
         else:
             return self.num_test
 
+
+
+
+
+# class MySTL10(object):
+#     def __init__(self, mode, dataset_size=1, image_transform=None, target_transform=None):
+#         assert mode in ['train', 'test'], 'but got mode {}'.format(mode)
+#         assert 0 < dataset_size <= 1
+#         if dataset_size != 1:
+#             raise NotImplementedError
+#         self.mode = mode
+#
+#         self.train_set = STL10(root='datas', split='train', transform=image_transform, target_transform=target_transform, download=True)
+#         self.test_set  = STL10(root='datas', split='test', transform=image_transform, target_transform=target_transform, download=True)
+#         self.dataset_size = dataset_size
+#
+#         print('Loading %s set, %d samples.' % (self.mode, self.__len__()))
+#
+#     def __len__(self):
+#         if self.mode == 'train':
+#             return 10400
+#         else:
+#             return 2600
+#
+#     def __getitem__(self, index):
+#         if self.mode == 'train':
+#             if index < 5000:
+#                 return self.train_set[index]
+#             else:
+#                 return self.test_set[index - 5000]
+#         else:
+#             return self.test_set[5400 + index]
+
 transformer = transforms.Compose([
     mu.ResizeImage((255, 255)),
     # transforms.RandomCrop(32, padding=4),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(), # range [0, 255] -> [0.0,1.0]
-    transforms.Normalize(mean=[0.333, 0.0586, 0.023], std=[0.265, 0.138, 0.0224])
-    ]
-)
+    transforms.Normalize(mean=[0.54968612, 0.53358832, 0.50672375],
+                          std=[0.3103792, 0.30555341, 0.31811437])
+])
