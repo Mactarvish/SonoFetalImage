@@ -668,7 +668,7 @@ def log_metrics(train, y_true, y_pred, loss, model, save_path, note=None, save=T
         top1_error_rate    = 1 - overall_accuracy
         precision_for_each_class = metrics.precision_score(y_true, y_pred, average=None)
         average_precision   = np.mean(precision_for_each_class)
-        f1_score = metrics.f1_score(y_true, y_pred, average='micro')
+        f1_score = 2 * (overall_accuracy * average_precision) / (overall_accuracy + average_precision)
 
         if show_detail:
             print('classify_report : \n', classify_report)
@@ -676,8 +676,8 @@ def log_metrics(train, y_true, y_pred, loss, model, save_path, note=None, save=T
             print('precision_for_each_class : \n', precision_for_each_class)
         print('test loss:', loss)
         print('average_precision: {0:f}'.format(average_precision))
-        print(Fore.RED, 'overall_accuracy: {0:f}'.format(overall_accuracy), Fore.BLACK)
-        print('f1-score: {0:f}'.format(f1_score))
+        print('overall_accuracy: {0:f}'.format(overall_accuracy))
+        print(Fore.RED, 'f1-score: {0:f}'.format(f1_score), Fore.BLACK)
         print('top-1 error rate: {0:f}'.format(top1_error_rate))
         print()
         dic = {'net_name': net_name, 'classify_report': classify_report, 'confusion_matrix': confusion_matrix, 'precision_for_each_class': precision_for_each_class,

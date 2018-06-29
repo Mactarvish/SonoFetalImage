@@ -40,8 +40,8 @@ DEBUG_MODE = False
 if DEBUG_MODE:
     DATASET_SIZE =1/500
 BATCH_SIZE = 10
-torch.manual_seed(60)
-torch.cuda.manual_seed(63)
+torch.manual_seed(61)
+torch.cuda.manual_seed(64)
 
 print(torch.cuda.is_available())
 
@@ -412,13 +412,13 @@ class GILR():
         self.inputs = inputs
         self.labels = labels
 
-        hyperparam_groups = self.get_hyperparams() # hyperparam_groups: [[lr_g1, lr_g2, lr_g3], [wd_g1, wd_g2, gd_g3], ...]
+        hyperparam_groups = self.get_hyperparams(epoch) # hyperparam_groups: [[lr_g1, lr_g2, lr_g3], [wd_g1, wd_g2, gd_g3], ...]
         assert len(hyperparam_groups) == len(self.update_hyparams_names), 'Number of FPA-upated hyperparameters must equal to number of specified params'
         for hyp, param_group in zip(zip(*hyperparam_groups), self.optimizer.param_groups): # hyp: (lr_g1, wd_g1, mom_g1) param_group: [g1, g2,
             for (p_key, p_value) in zip(self.update_hyparams_names, hyp):
                 param_group[p_key] = p_value
 
-    def get_hyperparams(self):
+    def get_hyperparams(self, epoch):
         def test_fun(hyperparams):
             '''
             Loss = test_fun(lrs)
@@ -448,9 +448,9 @@ class GILR():
             loss_float = loss.cpu().data.numpy()
             return loss_float
 
-        fpa = FPA(fitness_function=test_fun, num_iteration=1, num_pollen=2, p_lp=0.8, conditions=[(self.num_groups, 0.00001, 0.2)]) # momentum: (self.num_groups, 0.5, 0.9)
+        fpa = FPA(fitness_function=test_fun, num_iteration=3, num_pollen=5, p_lp=0.8, conditions=[(self.num_groups, 0.00001, 0.2)]) # momentum: (self.num_groups, 0.5, 0.9)
 
-        fitness, pollen = fpa.run()
+        fitness, pollen = fpa.run(epoch)
         loss = fitness
         hyperparam_groups = pollen.components
 
@@ -533,7 +533,7 @@ def test(model, criterion, epoch):
         mu.log_metrics(False, log_y_trues, log_y_predictions, log_loss, model=model, save=save,
                        show_detail=show_detail, save_path=current_save_folder, note=NOTE)
 
-GI = True
+GI = False
 NOTE = None
 
 if GI:
